@@ -6,14 +6,14 @@ use crossterm::{
 };
 use ratatui::{
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Paragraph},
     Frame, Terminal,
 };
 use std::{
-    io::{self, stdout},
+    io::stdout,
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
@@ -25,10 +25,18 @@ use translate::{
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // 1. Kiểm tra mô hình
-    let model = Path::new("models/Hy-MT2-1.8B-Q4_K_M.gguf");
+    // 1. Kiểm tra và chọn mô hình (mặc định 7B, có thể truyền --1.8b để dùng bản 1.8B)
+    let args: Vec<String> = std::env::args().collect();
+    let use_1_8b = args.iter().any(|a| a == "--1.8b" || a == "1.8b");
+    let model_str = if use_1_8b {
+        "models/Hy-MT2-1.8B-Q4_K_M.gguf"
+    } else {
+        "models/Hy-MT2-7B-Q4_K_M.gguf"
+    };
+    let model = Path::new(model_str);
+
     if !model.exists() {
-        println!("Đang tải mô hình...");
+        println!("Đang tải mô hình {:?} từ Hugging Face...", model);
         ensure_hymt2_model(model).await?;
     }
 
@@ -56,9 +64,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (tx, mut rx) = mpsc::unbounded_channel::<TranslationProgress>();
 
     // Cấu hình options dịch thuật
-    let args: Vec<String> = std::env::args().collect();
-    let input_path = if args.len() > 1 {
-        PathBuf::from(&args[1])
+    let non_flag_args: Vec<&String> = args
+        .iter()
+        .skip(1)
+        .filter(|a| !a.starts_with("--") && *a != "1.8b" && *a != "7b")
+        .collect();
+
+    let input_path = if let Some(path_arg) = non_flag_args.first() {
+        PathBuf::from(path_arg)
     } else {
         PathBuf::from("input/第001集.zh.vtt")
     };

@@ -7,12 +7,24 @@ use translate::{
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    println!("=== CHƯƠNG TRÌNH KIỂM THỬ THƯ VIỆN TRANSLATE (HY-MT2 1.8B) ===");
-
     // 1. Chỉ định đường dẫn lưu và sử dụng model theo đúng cú pháp yêu cầu:
-    let model = Path::new("models/Hy-MT2-1.8B-Q4_K_M.gguf");
+    // Mặc định kích hoạt bản 7B (chất lượng cao nhất). Dùng cờ --1.8b nếu muốn chạy bản 1.8B siêu tốc.
+    let args: Vec<String> = std::env::args().collect();
+    let use_1_8b = args.iter().any(|a| a == "--1.8b" || a == "1.8b");
+    let model_str = if use_1_8b {
+        "models/Hy-MT2-1.8B-Q4_K_M.gguf"
+    } else {
+        "models/Hy-MT2-7B-Q4_K_M.gguf"
+    };
+    let model = Path::new(model_str);
+
+    println!(
+        "=== CHƯƠNG TRÌNH DỊCH THUẬT PHỤ ĐỀ [{}] ===",
+        if use_1_8b { "TENCENT HY-MT2 1.8B" } else { "TENCENT HY-MT2 7B" }
+    );
+
     if !model.exists() {
-        println!("Mô hình chưa có trong đường dẫn, bắt đầu tải tự động...");
+        println!("Mô hình {:?} chưa có trong đường dẫn, bắt đầu tải tự động từ Hugging Face...", model);
         ensure_hymt2_model(model).await?;
     } else {
         println!("{} Mô hình đã có sẵn tại: {:?}", cli_gui_form::Icons::SUCCESS, model);
@@ -38,9 +50,14 @@ async fn main() -> anyhow::Result<()> {
     // Hỗ trợ cả 2 trường hợp nhập liệu:
     //   - Trường hợp A: Thư mục chứa nhiều file: cargo run --release --example demo_translate -- input
     //   - Trường hợp B: Một file duy nhất: cargo run --release --example demo_translate -- input/第001集.zh.vtt
-    let args: Vec<String> = std::env::args().collect();
-    let input_path = if args.len() > 1 {
-        PathBuf::from(&args[1])
+    let non_flag_args: Vec<&String> = args
+        .iter()
+        .skip(1)
+        .filter(|a| !a.starts_with("--") && *a != "1.8b" && *a != "7b")
+        .collect();
+
+    let input_path = if let Some(path_arg) = non_flag_args.first() {
+        PathBuf::from(path_arg)
     } else {
         PathBuf::from("input/第001集.zh.vtt") // Mặc định chạy 1 file để kiểm tra nhanh
     };

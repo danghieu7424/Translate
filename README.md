@@ -1,6 +1,6 @@
-# 🚀 Translate — Thư Viện Dịch Phụ Đề Chuyên Nghiệp Tencent Hy-MT2 (1.8B GGUF)
+# 🚀 Translate — Thư Viện Dịch Phụ Đề Chuyên Nghiệp Tencent Hy-MT2 (1.8B / 7B GGUF)
 
-Thư viện Rust tối ưu hóa hiệu năng cao để dịch phụ đề WebVTT (`.vtt`) và SubRip (`.srt`) bằng mô hình dịch thuật chuyên sâu **Tencent Hy-MT2 1.8B GGUF**, vận hành trên nền **Native C++ Engine** (Zero-Python, không phụ thuộc môi trường Python/pip/conda).
+Thư viện Rust tối ưu hóa hiệu năng cao để dịch phụ đề WebVTT (`.vtt`) và SubRip (`.srt`) bằng mô hình dịch thuật chuyên sâu **Tencent Hy-MT2 1.8B / 7B GGUF**, vận hành trên nền **Native C++ Engine** (Zero-Python, không phụ thuộc môi trường Python/pip/conda).
 
 Được thiết kế sẵn sàng tích hợp với hệ thống giao diện dòng lệnh **`cli_gui_form`** (Ratatui TUI) theo chuẩn hiển thị trong `demo_master.rs`.
 
@@ -12,27 +12,35 @@ Thư viện Rust tối ưu hóa hiệu năng cao để dịch phụ đề WebVTT
    - **Chế độ file đơn lẻ**: Dịch trực tiếp một file phụ đề `.vtt` hoặc `.srt`.
    - **Chế độ thư mục (Batch Mode)**: Tự động quét và dịch toàn bộ danh sách phụ đề có trong thư mục chỉ định (ví dụ `input/`).
 
-2. **Tự động tải và kiểm tra mô hình GGUF:**
-   - Tự động phát hiện nếu file weights chưa tồn tại và tải từ Hugging Face Hub (`tencent/Hy-MT2-1.8B-GGUF`).
+2. **Tự động tải và kiểm tra mô hình GGUF (Hỗ trợ cả 1.8B & 7B):**
+   - Tự động phát hiện nếu file weights chưa tồn tại và tải từ Hugging Face Hub (`tencent/Hy-MT2-1.8B-GGUF` hoặc `tencent/Hy-MT2-7B-GGUF`).
    - Hỗ trợ đúng cú pháp yêu cầu:
      ```rust
+     // Sử dụng bản 1.8B (1.13 GB - siêu tốc):
      let model = Path::new("models/Hy-MT2-1.8B-Q4_K_M.gguf");
+     // HOẶC sử dụng bản 7B (4.62 GB - chất lượng văn chương đỉnh cao):
+     // let model = Path::new("models/Hy-MT2-7B-Q4_K_M.gguf");
+     
      if !model.exists() {
          ensure_hymt2_model(model).await?;
      }
      ```
 
-3. **Cấu hình vai vế & xưng hô siêu nhẹ qua `vocabulary` (Token-Efficient):**
+3. **Bảo toàn và chuẩn hóa sub chú thích `《...》` sang `〈...〉`:**
+   - Đảm bảo 100% không bị mất ngoặc và không bị biến thành markdown bold `**...**`.
+   - Ví dụ: `《陆清安》` $\rightarrow$ `〈Lục Thanh An〉`, `《系统》` $\rightarrow$ `〈Hệ thống〉`.
+
+4. **Cấu hình vai vế & xưng hô siêu nhẹ qua `vocabulary` (Token-Efficient):**
    - Định dạng cấu hình trực quan, tối giản dạng `k = v` hoặc `k: v`.
-   - **Cơ chế Dynamic Filtering**: Chỉ nạp vào prompt những từ vựng thực sự xuất hiện trong câu đang dịch. Giúp giảm đến **95%+ token**, triệt tiêu chi phí dư thừa và ngăn chặn dịch sai xưng hô (ví dụ: `爸 = cha`, `妈 = mẹ`).
+   - **Cơ chế Dynamic Filtering**: Chỉ nạp vào prompt những từ vựng thực sự xuất hiện trong câu đang dịch. Giúp giảm đến **95%+ token**, triệt tiêu chi phí dư thừa và ép chặt xưng hô Tu Tiên (`爸 = cha`, `妈 = mẹ`, `我 = ta`, `你 = ngươi`, `妻子 = thê tử`).
    - Hiệu đính hậu kỳ tự động đảm bảo các thuật ngữ cốt lõi luôn được giữ vững.
 
-4. **Tương thích 100% chuẩn tiến trình của `cli_gui_form`:**
+5. **Tương thích 100% chuẩn tiến trình của `cli_gui_form`:**
    - Cung cấp cấu trúc `TranslationProgress` hỗ trợ chuyển đổi trực tiếp sang `cli_gui_form::TaskWidget` (`to_task_widget`, `update_task_widget`).
    - Hỗ trợ đầy đủ phong cách **Parallelogram (Cyberpunk)** và **Line (Vercel Minimalist)** chuẩn hóa như trong `demo_master.rs`.
    - Đi kèm bộ in tiến trình CLI Terminal cực đẹp khi không mở TUI toàn màn hình.
 
-5. **Tối ưu tốc độ Native C++:**
+6. **Tối ưu tốc độ Native C++:**
    - Khởi chạy engine C++ độc lập qua loopback localhost, giải phóng hoàn toàn bộ nhớ RAM và đóng tiến trình khi hoàn thành (RAII Guard).
 
 ---
@@ -48,15 +56,16 @@ Translate/
 │   └── Hy-MT2-1.8B-Q4_K_M.gguf
 ├── output/                 # Thư mục xuất phụ đề đã dịch (.vi.vtt, .vi.srt)
 ├── src/
-│   ├── downloader.rs       # Tự động tải mô hình từ Hugging Face
-│   ├── engine.rs           # Quản lý Native C++ Engine (Hy-MT2 1.8B)
+│   ├── downloader.rs       # Tự động tải mô hình từ Hugging Face (1.8B / 7B)
+│   ├── engine.rs           # Quản lý Native C++ Engine
 │   ├── lib.rs              # Public API của thư viện
 │   ├── progress.rs         # Định dạng tiến trình chuẩn cli_gui_form
 │   ├── subtitle.rs         # Parser & Writer cho VTT & SRT
-│   ├── translator.rs       # Điều phối dịch thuật toàn diện
+│   ├── translator.rs       # Điều phối dịch thuật toàn diện & xử lý chú thích
 │   └── vocabulary.rs       # Quản lý bảng từ vựng & xưng hô vai vế
 ├── examples/
-│   └── demo_translate.rs   # Ví dụ mẫu kiểm thử thực tế
+│   ├── demo_translate.rs   # Ví dụ CLI mẫu kiểm thử thực tế
+│   └── demo_tui.rs         # Ví dụ giao diện đồ họa Ratatui TUI với TaskWidget
 ├── vocabulary.txt          # File cấu hình xưng hô & thuật ngữ
 ├── Cargo.toml
 ├── LICENSE                 # Giấy phép MIT

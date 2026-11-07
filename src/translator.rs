@@ -202,14 +202,22 @@ impl Translator {
         let mut config = self.options.hymt_config.clone().unwrap_or_default();
         config.model_path = model.clone();
 
+        let model_tag = if model.to_string_lossy().to_lowercase().contains("7b") {
+            "Hy-MT2 (7B)"
+        } else {
+            "Hy-MT2 (1.8B)"
+        };
+
         println!(
-            "{} Đang khởi động Native Engine cho mô hình Tencent Hy-MT2 (1.8B)...",
-            cli_gui_form::Icons::RUN
+            "{} Đang khởi động Native Engine cho mô hình Tencent {}...",
+            cli_gui_form::Icons::RUN,
+            model_tag
         );
         let worker = HyMtWorker::new(config).await?;
         println!(
-            "{} Hy-MT2 Engine đã sẵn sàng! Bắt đầu dịch {} file phụ đề...",
+            "{} {} Engine đã sẵn sàng! Bắt đầu dịch {} file phụ đề...",
             cli_gui_form::Icons::SUCCESS,
+            model_tag,
             total_files
         );
 
