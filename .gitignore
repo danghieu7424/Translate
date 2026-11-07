@@ -1,5 +1,7 @@
 target/
 cli_gui_form/
+output/
+hymt_bin/
 
 *.vtt
 *.srt
