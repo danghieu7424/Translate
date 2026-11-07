@@ -4,23 +4,27 @@
 # Tối ưu token: Thư viện chỉ chèn các từ xuất hiện trong câu hiện tại vào prompt.
 # ==============================================================================
 
-# Xưng hô gia đình & đời sống
+# Xưng hô vai vế gia đình & Tu Tiên / Cổ Trang
 爸 = cha
 妈 = mẹ
 爸爸 = cha
 妈妈 = mẹ
-哥 = anh
-哥哥 = anh trai
-弟 = đệ
-弟弟 = em trai
-姐 = chị
-姐姐 = chị gái
-妹 = muội
-妹妹 = em gái
-老婆 = vợ
-老公 = chồng
-妻子 = người vợ
-丈夫 = người chồng
+我 = ta
+你 = ngươi
+妻子 = thê tử
+丈夫 = phu quân
+老婆 = thê tử
+老公 = phu quân
+女人 = nữ nhân
+男人 = nam nhân
+哥 = ca ca
+哥哥 = ca ca
+弟 = đệ đệ
+弟弟 = đệ đệ
+姐 = tỷ tỷ
+姐姐 = tỷ tỷ
+妹 = muội muội
+妹妹 = muội muội
 儿子 = con trai
 女儿 = con gái
 
@@ -28,8 +32,9 @@
 师兄 = sư huynh
 师弟 = sư đệ
 师姐 = sư tỷ
-师muội = sư muội
+师妹 = sư muội
 师父 = sư phụ
+师尊 = sư tôn
 徒儿 = đồ nhi
 徒弟 = đồ đệ
 前辈 = tiền bối
@@ -41,6 +46,7 @@
 本座 = bổn tọa
 本尊 = bản tôn
 老夫 = lão phu
+道侣 = đạo lữ
 
 # Tên riêng & thuật ngữ đặc thù trong truyện
 陆清安 = Lục Thanh An
@@ -50,10 +56,13 @@
 大帝 = Đại Đế
 系统 = hệ thống
 修为 = tu vi
-返还 = trả về
+返还 = hoàn trả
 万倍 = vạn lần
 杀戮 = sát lục
 觉醒 = thức tỉnh
 突破 = đột phá
 无敌 = vô địch
-
+结婚 = thành thân
+生子 = sinh con
+离婚 = hòa ly
+对方 = đối phương

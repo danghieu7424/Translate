@@ -142,29 +142,42 @@ pub async fn ensure_model(model_path: &Path) -> Result<PathBuf> {
 /// Tìm hoặc định vị binary C++ Inference Engine (llama-server.exe / hymt_server.exe)
 pub fn find_or_download_engine() -> Result<PathBuf> {
     let mut candidates = Vec::new();
+    let bin_names = ["llama-server.exe", "hymt_server.exe", "llama-server", "hymt_server"];
 
     // 1. Cùng cấp với file exe đang chạy
     if let Ok(exe) = std::env::current_exe() {
         if let Some(parent) = exe.parent() {
-            candidates.push(parent.join("hymt_bin").join("llama-server.exe"));
-            candidates.push(parent.join("hymt_bin").join("hymt_server.exe"));
-            candidates.push(parent.join("llama-server.exe"));
-            candidates.push(parent.join("hymt_server.exe"));
+            for name in &bin_names {
+                candidates.push(parent.join("hymt_bin").join(name));
+                candidates.push(parent.join(name));
+            }
 
             if let Some(target_dir) = parent.parent() {
                 if let Some(ws_root) = target_dir.parent() {
-                    candidates.push(ws_root.join("hymt_bin").join("llama-server.exe"));
-                    candidates.push(ws_root.join("hymt_bin").join("hymt_server.exe"));
+                    for name in &bin_names {
+                        candidates.push(ws_root.join("hymt_bin").join(name));
+                        candidates.push(ws_root.join("bin").join(name));
+                    }
                 }
             }
         }
     }
 
     // 2. Thư mục hiện tại (CWD)
-    candidates.push(PathBuf::from("hymt_bin/llama-server.exe"));
-    candidates.push(PathBuf::from("hymt_bin/hymt_server.exe"));
-    candidates.push(PathBuf::from("bin/llama-server.exe"));
-    candidates.push(PathBuf::from("llama-server.exe"));
+    for name in &bin_names {
+        candidates.push(PathBuf::from("hymt_bin").join(name));
+        candidates.push(PathBuf::from("bin").join(name));
+        candidates.push(PathBuf::from(name));
+    }
+
+    // 3. Tìm trong biến môi trường PATH
+    if let Ok(path_var) = std::env::var("PATH") {
+        for dir in std::env::split_paths(&path_var) {
+            for name in &bin_names {
+                candidates.push(dir.join(name));
+            }
+        }
+    }
 
     for p in &candidates {
         if p.exists() {
@@ -173,6 +186,6 @@ pub fn find_or_download_engine() -> Result<PathBuf> {
     }
 
     Err(anyhow!(
-        "Chưa tìm thấy binary llama-server.exe / hymt_server.exe trong hymt_bin/."
+        "Chưa tìm thấy binary llama-server / hymt_server trong hymt_bin/ hoặc PATH."
     ))
 }

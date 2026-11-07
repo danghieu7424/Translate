@@ -71,8 +71,9 @@ impl Vocabulary {
     /// Giúp tiết kiệm 95%+ lượng token đưa vào LLM/Hy-MT2, đồng thời tăng tính chính xác.
     pub fn filter_relevant(&self, text: &str) -> Vec<(&str, &str)> {
         let mut relevant = Vec::new();
+        let text_lower = text.to_lowercase();
         for (k, v) in &self.mappings {
-            if text.contains(k.as_str()) {
+            if text.contains(k.as_str()) || text_lower.contains(&k.to_lowercase()) {
                 relevant.push((k.as_str(), v.as_str()));
             }
         }

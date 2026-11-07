@@ -168,12 +168,35 @@ impl HyMtWorker {
     pub async fn translate(
         &self,
         text: &str,
-        _domain_hint: &str,
+        domain_hint: &str,
         vocab_instruction: Option<&str>,
     ) -> Result<String> {
+        let hint_lower = domain_hint.to_lowercase();
+        let is_xianxia = hint_lower.contains("tu tiên")
+            || hint_lower.contains("xianxia")
+            || hint_lower.contains("xuanhuan")
+            || hint_lower.contains("huyền huyễn")
+            || hint_lower.contains("donghua")
+            || hint_lower.contains("manhua")
+            || hint_lower.contains("cổ trang")
+            || hint_lower.contains("kiếm hiệp");
+
+        let is_modern = hint_lower.contains("hiện đại")
+            || hint_lower.contains("modern")
+            || hint_lower.contains("đô thị")
+            || hint_lower.contains("urban");
+
+        let style_directive = if is_xianxia {
+            "Translate the Chinese text to Vietnamese in classical Tu Tiên/Xianxia novel style (STRICTLY use Sino-Vietnamese pronouns: 我=ta, 你=ngươi, 妻子=thê tử, 丈夫=phu quân, 女人=nữ nhân, 杀戮=sát lục, 修为=tu vi; NEVER use modern pronouns: tôi, bạn, người vợ, phụ nữ). Output ONLY the Vietnamese translation"
+        } else if is_modern {
+            "Translate to Vietnamese in modern daily life/urban register (STRICTLY use modern natural pronouns: anh/em, tôi/bạn, cậu/tớ; NEVER use archaic pronouns: tại hạ, bổn tọa, phu quân, thê tử). Output ONLY the Vietnamese translation"
+        } else {
+            "Translate to Vietnamese. Output ONLY the Vietnamese translation"
+        };
+
         let prompt = match vocab_instruction {
-            Some(v) if !v.is_empty() => format!("Translate to Vietnamese ({}): {}", v, text),
-            _ => format!("Translate to Vietnamese: {}", text),
+            Some(v) if !v.is_empty() => format!("{} ({}): {}", style_directive, v, text),
+            _ => format!("{}: {}", style_directive, text),
         };
 
         let body = serde_json::json!({

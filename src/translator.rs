@@ -35,11 +35,82 @@ impl Default for TranslationOptions {
             output_dir: PathBuf::from("output"),
             model_path: PathBuf::from("models/Hy-MT2-1.8B-Q4_K_M.gguf"),
             vocabulary_path: Some(PathBuf::from("vocabulary.txt")),
-            domain_hint: "tu tiên, donghua, cổ trang".to_string(),
+            domain_hint: "tu tiên, donghua, cổ trang hán việt".to_string(),
             hymt_config: None,
             on_progress: None,
         }
     }
+}
+
+/// Phát hiện và bóc tách sub chú thích: Giữ nguyên chú thích và chuyển 《...》 hoặc 【...】 thành 〈...〉
+pub fn process_bracket_annotations(raw_text: &str) -> (bool, String) {
+    let trimmed = raw_text.trim();
+    if (trimmed.starts_with('《') && trimmed.ends_with('》'))
+        || (trimmed.starts_with('〈') && trimmed.ends_with('〉'))
+        || (trimmed.starts_with('【') && trimmed.ends_with('】'))
+        || (trimmed.starts_with('〔') && trimmed.ends_with('〕'))
+    {
+        let inner = trimmed
+            .trim_start_matches(['《', '〈', '【', '〔'])
+            .trim_end_matches(['》', '〉', '】', '〕'])
+            .trim();
+        (true, inner.to_string())
+    } else {
+        (false, trimmed.to_string())
+    }
+}
+
+/// Định dạng sub chú thích theo dạng chuẩn 〈...〉, không bị mất dấu và không bị biến thành markdown bold **.
+pub fn format_translated_annotation(translated: &str, is_full_annotation: bool) -> String {
+    let mut clean = translated.trim().to_string();
+
+    // Bỏ các định dạng markdown bold **...** do model tự sinh
+    if clean.starts_with("**") && clean.ends_with("**") && clean.len() >= 4 {
+        clean = clean[2..clean.len() - 2].trim().to_string();
+    }
+    clean = clean.trim_matches(['"', '\'', '`']).trim().to_string();
+
+    if is_full_annotation {
+        // Luôn bọc chắc chắn bằng dạng 〈...〉 chuẩn theo yêu cầu
+        clean = clean
+            .trim_start_matches(['《', '〈', '【', '〔', '*', '_', '`'])
+            .trim_end_matches(['》', '〉', '】', '〕', '*', '_', '`'])
+            .trim()
+            .to_string();
+        format!("〈{}〉", clean)
+    } else {
+        // Chuyển đổi mọi 《 thành 〈 và 》 thành 〉 nếu nằm bên trong câu
+        clean = clean.replace('《', "〈").replace('》', "〉");
+        clean = clean.replace("**", "");
+        clean
+    }
+}
+
+/// Chuẩn hóa đại từ xưng hô trong văn phong tu tiên, loại bỏ sót đại từ hiện đại
+pub fn normalize_xianxia_pronouns(text: &str) -> String {
+    let mut s = text.to_string();
+    let replacements = [
+        ("Tôi ", "Ta "),
+        (" tôi ", " ta "),
+        (" tôi.", " ta."),
+        (" tôi,", " ta,"),
+        (" tôi!", " ta!"),
+        (" tôi?", " ta?"),
+        ("Bạn ", "Ngươi "),
+        (" bạn ", " ngươi "),
+        (" bạn.", " ngươi."),
+        (" bạn,", " ngươi,"),
+        ("người vợ", "thê tử"),
+        ("vợ tôi", "thê tử của ta"),
+        ("vợ ta", "thê tử của ta"),
+        ("người phụ nữ", "nữ nhân"),
+        ("vợ chồng", "phu thê"),
+    ];
+
+    for (from, to) in replacements {
+        s = s.replace(from, to);
+    }
+    s
 }
 
 /// Bộ dịch phụ đề sử dụng mô hình Tencent Hy-MT2 1.8B GGUF
@@ -142,6 +213,15 @@ impl Translator {
             total_files
         );
 
+        let is_xianxia = {
+            let h = self.options.domain_hint.to_lowercase();
+            h.contains("tu tiên")
+                || h.contains("xianxia")
+                || h.contains("cổ trang")
+                || h.contains("huyền huyễn")
+                || h.contains("donghua")
+        };
+
         let mut output_files = Vec::new();
 
         for (file_idx, file_path) in sub_files.iter().enumerate() {
@@ -161,7 +241,9 @@ impl Translator {
                 let elapsed_sec = start_file_time.elapsed().as_secs();
                 let duration_str = format!("{:02}:{:02}", elapsed_sec / 60, elapsed_sec % 60);
 
-                let vocab_hint = self.vocabulary.format_prompt_hint(&cue.text);
+                // Tách chú thích nếu có
+                let (is_annotation, text_to_translate) = process_bracket_annotations(&cue.text);
+                let vocab_hint = self.vocabulary.format_prompt_hint(&text_to_translate);
                 let status_msg = format!(
                     "[HY-MT2] Dịch câu #{}/{} ▹ [{}]",
                     current_cue_num, total_cues, self.options.domain_hint
@@ -188,7 +270,7 @@ impl Translator {
                 // Dịch câu hiện tại
                 let raw_trans = worker
                     .translate(
-                        &cue.text,
+                        &text_to_translate,
                         &self.options.domain_hint,
                         vocab_hint.as_deref(),
                     )
@@ -196,9 +278,19 @@ impl Translator {
                     .with_context(|| format!("Lỗi dịch câu #{}: {:?}", current_cue_num, cue.text))?;
 
                 // Hiệu đính hậu kỳ theo từ điển vai vế
-                let final_trans = self
+                let corrected = self
                     .vocabulary
-                    .apply_post_corrections(&raw_trans, &cue.text);
+                    .apply_post_corrections(&raw_trans, &text_to_translate);
+
+                // Chuẩn hóa đại từ Tu Tiên nếu thuộc ngữ cảnh cổ trang/tu tiên
+                let normalized = if is_xianxia {
+                    normalize_xianxia_pronouns(&corrected)
+                } else {
+                    corrected
+                };
+
+                // Đảm bảo không mất sub chú thích 《》, định dạng chuẩn sang 〈...〉
+                let final_trans = format_translated_annotation(&normalized, is_annotation);
 
                 if let Some(ref cb) = self.options.on_progress {
                     cb(TranslationProgress {
