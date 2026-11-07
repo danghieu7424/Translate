@@ -76,6 +76,7 @@ async fn main() -> anyhow::Result<()> {
         domain_hint: "tu tiên, donghua, cổ trang hán việt".to_string(),
         hymt_config: None,
         on_progress: Some(on_progress),
+        batch_size: 10,
     };
 
     let translator = Translator::new(options);

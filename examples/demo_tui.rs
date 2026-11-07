@@ -86,6 +86,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         on_progress: Some(Arc::new(move |p: TranslationProgress| {
             let _ = tx.send(p);
         })),
+        batch_size: 10,
     };
 
     // Chạy tiến trình dịch ở background task

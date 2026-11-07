@@ -26,6 +26,8 @@ pub struct TranslationOptions {
     pub hymt_config: Option<HyMtConfig>,
     /// Callback cập nhật tiến trình (dùng cho TUI TaskWidget hoặc CLI)
     pub on_progress: Option<ProgressCallback>,
+    /// Số câu dịch mỗi lượt gọi (Batch size, mặc định: 10). Nếu đặt 1 sẽ dịch 1:1 nghiêm ngặt.
+    pub batch_size: usize,
 }
 
 impl Default for TranslationOptions {
@@ -33,11 +35,12 @@ impl Default for TranslationOptions {
         Self {
             input_path: PathBuf::from("input"),
             output_dir: PathBuf::from("output"),
-            model_path: PathBuf::from("models/Hy-MT2-1.8B-Q4_K_M.gguf"),
+            model_path: PathBuf::from("models/Hy-MT2-7B-Q4_K_M.gguf"),
             vocabulary_path: Some(PathBuf::from("vocabulary.txt")),
             domain_hint: "tu tiên, donghua, cổ trang hán việt".to_string(),
             hymt_config: None,
             on_progress: None,
+            batch_size: 10,
         }
     }
 }
@@ -243,26 +246,42 @@ impl Translator {
 
             let mut translated_texts = Vec::with_capacity(total_cues);
             let start_file_time = Instant::now();
+            let batch_size = self.options.batch_size.max(1);
 
-            for (cue_idx, cue) in cues.iter().enumerate() {
-                let current_cue_num = cue_idx + 1;
+            for (chunk_start_idx, chunk) in cues.chunks(batch_size).enumerate() {
+                let start_idx = chunk_start_idx * batch_size;
+                let chunk_len = chunk.len();
+
+                // 1. Chuẩn bị metadata cho từng câu trong chunk
+                let mut chunk_items = Vec::with_capacity(chunk_len);
+                for (rel_i, cue) in chunk.iter().enumerate() {
+                    let (is_annotation, text_to_trans) = process_bracket_annotations(&cue.text);
+                    let vocab_hint = self.vocabulary.format_prompt_hint(&text_to_trans);
+                    chunk_items.push((start_idx + rel_i, cue, is_annotation, text_to_trans, vocab_hint));
+                }
+
+                // Gửi thông tin tiến trình bắt đầu lô
                 let elapsed_sec = start_file_time.elapsed().as_secs();
                 let duration_str = format!("{:02}:{:02}", elapsed_sec / 60, elapsed_sec % 60);
+                let first_cue_num = start_idx + 1;
+                let last_cue_num = (start_idx + chunk_len).min(total_cues);
+                let status_msg = if batch_size > 1 && chunk_len > 1 {
+                    format!(
+                        "[HY-MT2] Dịch lô câu #{}-#{}/{} ▹ [{}]",
+                        first_cue_num, last_cue_num, total_cues, self.options.domain_hint
+                    )
+                } else {
+                    format!(
+                        "[HY-MT2] Dịch câu #{}/{} ▹ [{}]",
+                        first_cue_num, total_cues, self.options.domain_hint
+                    )
+                };
 
-                // Tách chú thích nếu có
-                let (is_annotation, text_to_translate) = process_bracket_annotations(&cue.text);
-                let vocab_hint = self.vocabulary.format_prompt_hint(&text_to_translate);
-                let status_msg = format!(
-                    "[HY-MT2] Dịch câu #{}/{} ▹ [{}]",
-                    current_cue_num, total_cues, self.options.domain_hint
-                );
-
-                // Gửi thông tin tiến trình nếu có đăng ký callback
                 if let Some(ref cb) = self.options.on_progress {
                     cb(TranslationProgress {
                         task_id: "translate_task".to_string(),
                         label: "Hy-MT2 Translation Engine".to_string(),
-                        current: current_cue_num,
+                        current: first_cue_num,
                         total: total_cues,
                         unit: "câu".to_string(),
                         duration: duration_str.clone(),
@@ -270,54 +289,136 @@ impl Translator {
                         file_index: file_idx + 1,
                         total_files,
                         file_name: file_name.clone(),
-                        source_text: cue.text.clone(),
+                        source_text: chunk[0].text.clone(),
                         translated_text: String::new(),
                     });
                 }
 
-                // Dịch câu hiện tại
-                let raw_trans = worker
-                    .translate(
-                        &text_to_translate,
-                        &self.options.domain_hint,
-                        vocab_hint.as_deref(),
-                    )
-                    .await
-                    .with_context(|| format!("Lỗi dịch câu #{}: {:?}", current_cue_num, cue.text))?;
+                // 2. Thử dịch theo batch nếu batch_size > 1
+                let texts_to_translate: Vec<&str> = chunk_items.iter().map(|item| item.3.as_str()).collect();
 
-                // Hiệu đính hậu kỳ theo từ điển vai vế
-                let corrected = self
-                    .vocabulary
-                    .apply_post_corrections(&raw_trans, &text_to_translate);
-
-                // Chuẩn hóa đại từ Tu Tiên nếu thuộc ngữ cảnh cổ trang/tu tiên
-                let normalized = if is_xianxia {
-                    normalize_xianxia_pronouns(&corrected)
+                let mut combined_terms = Vec::new();
+                for item in &chunk_items {
+                    if let Some(ref h) = item.4 {
+                        for part in h.split(',') {
+                            let trimmed = part.trim();
+                            if !trimmed.is_empty() && !combined_terms.contains(&trimmed) {
+                                combined_terms.push(trimmed);
+                            }
+                        }
+                    }
+                }
+                let combined_vocab_hint = if combined_terms.is_empty() {
+                    None
                 } else {
-                    corrected
+                    Some(combined_terms.join(", "))
                 };
 
-                // Đảm bảo không mất sub chú thích 《》, định dạng chuẩn sang 〈...〉
-                let final_trans = format_translated_annotation(&normalized, is_annotation);
+                let batch_result = if batch_size > 1 && chunk_len > 1 {
+                    worker
+                        .translate_batch(
+                            &texts_to_translate,
+                            &self.options.domain_hint,
+                            combined_vocab_hint.as_deref(),
+                        )
+                        .await?
+                } else {
+                    None
+                };
 
-                if let Some(ref cb) = self.options.on_progress {
-                    cb(TranslationProgress {
-                        task_id: "translate_task".to_string(),
-                        label: "Hy-MT2 Translation Engine".to_string(),
-                        current: current_cue_num,
-                        total: total_cues,
-                        unit: "câu".to_string(),
-                        duration: duration_str,
-                        status: status_msg,
-                        file_index: file_idx + 1,
-                        total_files,
-                        file_name: file_name.clone(),
-                        source_text: cue.text.clone(),
-                        translated_text: final_trans.clone(),
-                    });
+                // 3. Xử lý kết quả: Nếu batch khớp đúng chunk_len, dùng luôn. Nếu không khớp hoặc None -> fallback 1:1
+                if let Some(batch_lines) = batch_result {
+                    for (rel_i, raw_trans) in batch_lines.into_iter().enumerate() {
+                        let (abs_idx, cue, is_annotation, text_to_trans, _) = &chunk_items[rel_i];
+                        let corrected = self
+                            .vocabulary
+                            .apply_post_corrections(&raw_trans, text_to_trans);
+                        let normalized = if is_xianxia {
+                            normalize_xianxia_pronouns(&corrected)
+                        } else {
+                            corrected
+                        };
+                        let final_trans = format_translated_annotation(&normalized, *is_annotation);
+
+                        if let Some(ref cb) = self.options.on_progress {
+                            let cur_num = abs_idx + 1;
+                            cb(TranslationProgress {
+                                task_id: "translate_task".to_string(),
+                                label: "Hy-MT2 Translation Engine".to_string(),
+                                current: cur_num,
+                                total: total_cues,
+                                unit: "câu".to_string(),
+                                duration: format!(
+                                    "{:02}:{:02}",
+                                    start_file_time.elapsed().as_secs() / 60,
+                                    start_file_time.elapsed().as_secs() % 60
+                                ),
+                                status: format!(
+                                    "[HY-MT2 Batch] Dịch câu #{}/{} ▹ [{}]",
+                                    cur_num, total_cues, self.options.domain_hint
+                                ),
+                                file_index: file_idx + 1,
+                                total_files,
+                                file_name: file_name.clone(),
+                                source_text: cue.text.clone(),
+                                translated_text: final_trans.clone(),
+                            });
+                        }
+
+                        translated_texts.push(final_trans);
+                    }
+                } else {
+                    // Fallback: Dịch từng câu 1:1 an toàn tuyệt đối
+                    for item in &chunk_items {
+                        let (abs_idx, cue, is_annotation, text_to_trans, vocab_hint) = item;
+                        let cur_num = abs_idx + 1;
+
+                        let raw_trans = worker
+                            .translate(
+                                text_to_trans,
+                                &self.options.domain_hint,
+                                vocab_hint.as_deref(),
+                            )
+                            .await
+                            .with_context(|| format!("Lỗi dịch câu #{}: {:?}", cur_num, cue.text))?;
+
+                        let corrected = self
+                            .vocabulary
+                            .apply_post_corrections(&raw_trans, text_to_trans);
+                        let normalized = if is_xianxia {
+                            normalize_xianxia_pronouns(&corrected)
+                        } else {
+                            corrected
+                        };
+                        let final_trans = format_translated_annotation(&normalized, *is_annotation);
+
+                        if let Some(ref cb) = self.options.on_progress {
+                            cb(TranslationProgress {
+                                task_id: "translate_task".to_string(),
+                                label: "Hy-MT2 Translation Engine".to_string(),
+                                current: cur_num,
+                                total: total_cues,
+                                unit: "câu".to_string(),
+                                duration: format!(
+                                    "{:02}:{:02}",
+                                    start_file_time.elapsed().as_secs() / 60,
+                                    start_file_time.elapsed().as_secs() % 60
+                                ),
+                                status: format!(
+                                    "[HY-MT2 Fallback 1:1] Câu #{}/{} ▹ [{}]",
+                                    cur_num, total_cues, self.options.domain_hint
+                                ),
+                                file_index: file_idx + 1,
+                                total_files,
+                                file_name: file_name.clone(),
+                                source_text: cue.text.clone(),
+                                translated_text: final_trans.clone(),
+                            });
+                        }
+
+                        translated_texts.push(final_trans);
+                    }
                 }
-
-                translated_texts.push(final_trans);
             }
 
             // Lưu file kết quả vào thư mục output chỉ định

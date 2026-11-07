@@ -230,6 +230,144 @@ impl HyMtWorker {
         let clean = raw.trim_matches('"').trim_matches('\'').trim().to_string();
         Ok(clean)
     }
+
+    /// Dịch hàng loạt một lô các câu (Batch Translation) để tối ưu tốc độ gấp nhiều lần
+    /// Trả về Some(Vec<String>) nếu số câu phân tích được khớp chính xác 100% số lượng câu yêu cầu.
+    /// Trả về None nếu mô hình gộp hoặc thiếu dòng (để hệ thống tự động kích hoạt fallback 1:1 an toàn).
+    pub async fn translate_batch(
+        &self,
+        texts: &[&str],
+        domain_hint: &str,
+        vocab_instruction: Option<&str>,
+    ) -> Result<Option<Vec<String>>> {
+        let n = texts.len();
+        if n == 0 {
+            return Ok(Some(Vec::new()));
+        }
+        if n == 1 {
+            let single = self.translate(texts[0], domain_hint, vocab_instruction).await?;
+            return Ok(Some(vec![single]));
+        }
+
+        let hint_lower = domain_hint.to_lowercase();
+        let is_xianxia = hint_lower.contains("tu tiên")
+            || hint_lower.contains("xianxia")
+            || hint_lower.contains("xuanhuan")
+            || hint_lower.contains("huyền huyễn")
+            || hint_lower.contains("donghua")
+            || hint_lower.contains("manhua")
+            || hint_lower.contains("cổ trang")
+            || hint_lower.contains("kiếm hiệp");
+
+        let is_modern = hint_lower.contains("hiện đại")
+            || hint_lower.contains("modern")
+            || hint_lower.contains("đô thị")
+            || hint_lower.contains("urban");
+
+        let style_directive = if is_xianxia {
+            "Translate each numbered Chinese line to Vietnamese in classical Tu Tiên/Xianxia style (STRICTLY use: 我=ta, 你=ngươi, 妻子=thê tử, 丈夫=phu quân, 女人=nữ nhân, 杀戮=sát lục, 修为=tu vi; NEVER use: tôi, bạn, người vợ). Output EXACTLY the same numbered lines (1. ... 2. ...)"
+        } else if is_modern {
+            "Translate each numbered Chinese line to Vietnamese in modern register. Output EXACTLY the same numbered lines (1. ... 2. ...)"
+        } else {
+            "Translate each numbered Chinese line to Vietnamese. Output EXACTLY the same numbered lines (1. ... 2. ...)"
+        };
+
+        let mut numbered_input = String::new();
+        for (i, t) in texts.iter().enumerate() {
+            numbered_input.push_str(&format!("{}. {}\n", i + 1, t));
+        }
+
+        let prompt = match vocab_instruction {
+            Some(v) if !v.is_empty() => format!(
+                "{}\n(Terminology: {})\n\nLines to translate:\n{}",
+                style_directive, v, numbered_input
+            ),
+            _ => format!("{}\n\nLines to translate:\n{}", style_directive, numbered_input),
+        };
+
+        let batch_tokens = (n as u32 * 90 + 128).min(1800);
+        let body = serde_json::json!({
+            "messages": [
+                { "role": "user", "content": prompt }
+            ],
+            "temperature": self.config.temperature,
+            "max_tokens": batch_tokens
+        });
+
+        let url = format!("http://127.0.0.1:{}/v1/chat/completions", self.port);
+        let resp = self
+            .client
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .context("Lỗi kết nối tới Native Hy-MT2 Engine khi dịch batch")?;
+
+        let parsed: ChatCompletionResponse = resp
+            .json()
+            .await
+            .context("Lỗi đọc dữ liệu JSON batch từ Native Hy-MT2 Engine")?;
+
+        let raw = parsed
+            .choices
+            .first()
+            .map(|c| c.message.content.trim().to_string())
+            .unwrap_or_default();
+
+        // Phân tích bóc tách các dòng đánh số
+        let mut parsed_results: Vec<Option<String>> = vec![None; n];
+
+        for line in raw.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            // Tìm số thứ tự ở đầu dòng (1. hoặc 1: hoặc 1、hoặc [1])
+            for target_idx in 1..=n {
+                let prefixes = [
+                    format!("{}.", target_idx),
+                    format!("{}:", target_idx),
+                    format!("{}、", target_idx),
+                    format!("[{}]", target_idx),
+                    format!("({})", target_idx),
+                ];
+
+                let mut matched = false;
+                for p in &prefixes {
+                    if trimmed.starts_with(p) {
+                        let text_part = trimmed[p.len()..].trim().trim_matches('"').trim_matches('\'').trim();
+                        parsed_results[target_idx - 1] = Some(text_part.to_string());
+                        matched = true;
+                        break;
+                    }
+                }
+                if matched {
+                    break;
+                }
+            }
+        }
+
+        // Kiểm tra xem có đủ đúng n câu không
+        let mut final_lines = Vec::with_capacity(n);
+        for item in parsed_results {
+            if let Some(content) = item {
+                if !content.is_empty() {
+                    final_lines.push(content);
+                } else {
+                    return Ok(None); // Dòng rỗng -> fallback
+                }
+            } else {
+                return Ok(None); // Thiếu câu -> fallback
+            }
+        }
+
+        if final_lines.len() == n {
+            Ok(Some(final_lines))
+        } else {
+            Ok(None)
+        }
+    }
 }
 
 impl Drop for HyMtWorker {
