@@ -187,7 +187,10 @@ impl HyMtWorker {
             || hint_lower.contains("urban");
 
         let style_directive = if is_xianxia {
-            "Translate the Chinese text to Vietnamese in classical Tu Tiên/Xianxia novel style (STRICTLY use Sino-Vietnamese pronouns: 我=ta, 你=ngươi, 妻子=thê tử, 丈夫=phu quân, 女人=nữ nhân, 杀戮=sát lục, 修为=tu vi; NEVER use modern pronouns: tôi, bạn, người vợ, phụ nữ). Output ONLY the Vietnamese translation"
+            "Translate the Chinese text to Vietnamese in classical Tu Tiên/Xianxia novel style. \
+            STRICTLY preserve accurate family roles: 爹/爹爹/父亲=cha/phụ thân, 娘/母亲=mẹ/mẫu thân, 女儿=con gái, 儿子=con trai (NEVER confuse father-daughter with husband-wife). \
+            Use classical Sino-Vietnamese pronouns (我=ta, 你=ngươi, 修为=tu vi, 杀戮=sát lục; NEVER use modern pronouns: tôi, bạn, người vợ). \
+            Output ONLY the Vietnamese translation"
         } else if is_modern {
             "Translate to Vietnamese in modern daily life/urban register (STRICTLY use modern natural pronouns: anh/em, tôi/bạn, cậu/tớ; NEVER use archaic pronouns: tại hạ, bổn tọa, phu quân, thê tử). Output ONLY the Vietnamese translation"
         } else {
@@ -265,7 +268,10 @@ impl HyMtWorker {
             || hint_lower.contains("urban");
 
         let style_directive = if is_xianxia {
-            "Translate each numbered Chinese line to Vietnamese in classical Tu Tiên/Xianxia style (STRICTLY use: 我=ta, 你=ngươi, 妻子=thê tử, 丈夫=phu quân, 女人=nữ nhân, 杀戮=sát lục, 修为=tu vi; NEVER use: tôi, bạn, người vợ). Output EXACTLY the same numbered lines (1. ... 2. ...)"
+            "Translate each numbered Chinese line to Vietnamese in classical Tu Tiên/Xianxia novel style. \
+            STRICTLY preserve accurate family roles: 爹/爹爹/父亲=cha/phụ thân, 娘/母亲=mẹ/mẫu thân, 女儿=con gái, 儿子=con trai (NEVER confuse father-daughter with husband-wife). \
+            Use classical Sino-Vietnamese pronouns (我=ta, 你=ngươi, 修为=tu vi, 杀戮=sát lục; NEVER use modern pronouns: tôi, bạn). \
+            Output EXACTLY the same numbered lines (1. ... 2. ...)"
         } else if is_modern {
             "Translate each numbered Chinese line to Vietnamese in modern register. Output EXACTLY the same numbered lines (1. ... 2. ...)"
         } else {

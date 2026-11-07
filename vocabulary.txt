@@ -5,6 +5,13 @@
 # ==============================================================================
 
 # Xưng hô vai vế gia đình & Tu Tiên / Cổ Trang
+爹 = cha
+爹爹 = cha
+爹亲 = phụ thân
+父亲 = phụ thân
+娘 = mẹ
+娘亲 = mẫu thân
+母亲 = mẫu thân
 爸 = cha
 妈 = mẹ
 爸爸 = cha
@@ -27,6 +34,13 @@
 妹妹 = muội muội
 儿子 = con trai
 女儿 = con gái
+宝贝女儿 = con gái cưng
+闺女 = con gái
+丫头 = nha đầu
+孩子 = hài tử
+夫君 = phu quân
+娘子 = nương tử
+夫人 = phu nhân
 
 # Xưng hô tiểu thuyết / Tu tiên / Cổ trang
 师兄 = sư huynh
@@ -51,6 +65,7 @@
 # Tên riêng & thuật ngữ đặc thù trong truyện
 陆清安 = Lục Thanh An
 徐清莹 = Từ Thanh Oánh
+林清雪 = Lâm Thanh Tuyết
 魔域 = Ma Vực
 魔帝 = Ma Đế
 大帝 = Đại Đế
@@ -64,5 +79,11 @@
 无敌 = vô địch
 结婚 = thành thân
 生子 = sinh con
+和离 = hòa ly
 离婚 = hòa ly
+休书 = hưu thư
 对方 = đối phương
+甜甜圈 = Bánh Donut
+草见愁 = Thảo Kiến Sầu
+奇变偶不变 = Kỳ biến ngẫu bất biến
+符号看象限 = Ký hiệu khán tượng hạn

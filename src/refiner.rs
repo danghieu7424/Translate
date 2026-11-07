@@ -152,10 +152,24 @@ impl Stage2Refiner {
             || self.domain_hint.to_lowercase().contains("cổ trang");
 
         let system_prompt = if is_xianxia {
-            "You are an expert Vietnamese literary editor specializing in Tu Tiên, Donghua, and classical Xianxia cinema. \
-            Your task is to refine and polish rough Vietnamese subtitle translations while preserving exact line numbers, \
-            meanings, and classical Sino-Vietnamese pronouns (STRICTLY use: ta, ngươi, thê tử, phu quân, tu vi, sát lục; NEVER use: tôi, bạn, người vợ). \
-            If a line has brackets 〈...〉, you MUST PRESERVE the brackets 〈...〉 exactly."
+            "You are a master Vietnamese subtitle editor for Xianxia / Donghua (Tiên hiệp, Cổ trang). \
+            Your core duty is to correct mistranslations and stiff wording in the rough draft by cross-referencing with the original Chinese dialogue.\n\
+            CRITICAL RULES:\n\
+            1. CHARACTER RELATION ACCURACY (DO NOT CONFUSE ROLES):\n\
+               - 爹 / 爹爹 / 父亲 = cha / phụ thân (NEVER translate as 'phu quân'!). When the daughter speaks to her father, she calls him 'cha/phụ thân' and refers to herself as 'con'.\n\
+               - 女儿 / 宝贝女儿 = con gái / con gái cưng (NEVER translate as 'thê tử'!). When a father speaks to his daughter, he calls himself 'cha/ta' and calls her 'con'.\n\
+               - 儿子 = con trai. 你们 = các con (khi cha nói với các con) hoặc các ngươi.\n\
+               - 妻子 / 娘子 = thê tử / nương tử. 丈夫 / 夫君 = phu quân.\n\
+            2. NATURAL VIETNAMESE CINEMA DIALOGUE:\n\
+               - Fix stiff, literal word-by-word translations. Make the dialogue emotional and cinematic.\n\
+               - Translate puns and names accurately: 甜甜圈 = Bánh Donut; 草见愁 = Thảo Kiến Sầu; 和离 = hòa ly.\n\
+            3. PRONOUNS:\n\
+               - Use classical pronouns: ta, ngươi, con, cha, mẫu thân, huynh, đệ, tỷ, muội.\n\
+               - NEVER use modern pronouns: tôi, bạn, người vợ, phụ nữ.\n\
+            4. SUBTITLE BRACKETS:\n\
+               - If a line has brackets 〈...〉 (e.g. 〈Lục Thanh An〉, 〈Hệ thống〉), you MUST PRESERVE the brackets 〈...〉 exactly.\n\
+            5. FORMAT:\n\
+               - Output EXACTLY the same numbered lines (1. ... 2. ...). No explanations."
         } else {
             "You are an expert Vietnamese subtitle dialogue editor. \
             Your task is to refine and polish rough Vietnamese subtitle translations into natural, fluent Vietnamese cinema dialogue \
