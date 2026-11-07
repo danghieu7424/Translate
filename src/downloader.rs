@@ -32,31 +32,51 @@ pub const LLAMA_WIN_CPU_ZIP_URL: &str =
 /// # }
 /// ```
 pub async fn ensure_model(model_path: &Path) -> Result<PathBuf> {
-    // 1. Kiểm tra nếu file đã tồn tại và kích thước hợp lệ (> 500MB)
+    let filename = model_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(HYMT2_GGUF_FILE);
+    let is_7b = filename.to_lowercase().contains("7b");
+    let min_valid_size: u64 = if is_7b {
+        3 * 1024 * 1024 * 1024 // 7B Q4_K_M phải > 3GB (thực tế ~4.62GB)
+    } else {
+        500 * 1024 * 1024 // 1.8B Q4_K_M ~1.13GB
+    };
+
+    // 1. Kiểm tra nếu file đã tồn tại và kích thước hợp lệ
     if model_path.exists() {
         if let Ok(meta) = model_path.metadata() {
-            if meta.len() > 500 * 1024 * 1024 {
+            if meta.len() >= min_valid_size {
                 return Ok(model_path.to_path_buf());
+            } else {
+                eprintln!(
+                    "{} File {:?} kích thước không khớp ({:.2} MB, cần ít nhất {:.2} MB). Đang xóa để tải lại đúng bản...",
+                    cli_gui_form::Icons::WARNING,
+                    model_path,
+                    meta.len() as f64 / (1024.0 * 1024.0),
+                    min_valid_size as f64 / (1024.0 * 1024.0)
+                );
+                let _ = fs::remove_file(model_path);
             }
         }
     }
 
-    // 2. Tìm kiếm ở các vị trí mặc định khác nếu có
+    // 2. Tìm kiếm ở các vị trí mặc định khác nếu có đúng tên file này
     let candidate_paths = [
-        PathBuf::from("models").join(HYMT2_GGUF_FILE),
-        PathBuf::from("../models").join(HYMT2_GGUF_FILE),
-        PathBuf::from("models/hymt2").join(HYMT2_GGUF_FILE),
+        PathBuf::from("models").join(filename),
+        PathBuf::from("../models").join(filename),
+        PathBuf::from("models/hymt2").join(filename),
     ];
 
     for cand in &candidate_paths {
-        if cand.exists() {
+        if cand.canonicalize().ok() != model_path.canonicalize().ok() && cand.exists() {
             if let Ok(meta) = cand.metadata() {
-                if meta.len() > 500 * 1024 * 1024 {
+                if meta.len() >= min_valid_size {
                     if let Some(parent) = model_path.parent() {
                         fs::create_dir_all(parent)?;
                     }
                     println!(
-                        "[Hy-MT2] Đã tìm thấy mô hình có sẵn tại {:?}, liên kết tới {:?}",
+                        "[Hy-MT2] Đã tìm thấy mô hình đúng tại {:?}, sao chép tới {:?}",
                         cand, model_path
                     );
                     let _ = fs::copy(cand, model_path);
@@ -107,7 +127,9 @@ pub async fn ensure_model(model_path: &Path) -> Result<PathBuf> {
         ));
     }
 
-    let total_size = response.content_length().unwrap_or(1_133_080_448);
+    let total_size = response
+        .content_length()
+        .unwrap_or(if is_7b { 4_960_000_000 } else { 1_133_080_448 });
     let mut downloaded: u64 = 0;
     let mut stream = response.bytes_stream();
     let mut file = File::create(&temp_dest)
