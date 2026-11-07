@@ -7,7 +7,7 @@
 # Xưng hô gia đình & đời sống
 爸 = cha
 妈 = mẹ
-爸爸 = bố
+爸爸 = cha
 妈妈 = mẹ
 哥 = anh
 哥哥 = anh trai
