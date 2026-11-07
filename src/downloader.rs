@@ -7,8 +7,13 @@ use std::time::Instant;
 
 pub const HYMT2_HF_REPO: &str = "tencent/Hy-MT2-1.8B-GGUF";
 pub const HYMT2_GGUF_FILE: &str = "Hy-MT2-1.8B-Q4_K_M.gguf";
-pub const HYMT2_DOWNLOAD_URL: &str =
+pub const HYMT2_1_8B_DOWNLOAD_URL: &str =
     "https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF/resolve/main/Hy-MT2-1.8B-Q4_K_M.gguf";
+
+pub const HYMT2_7B_DOWNLOAD_URL: &str =
+    "https://huggingface.co/tencent/Hy-MT2-7B-GGUF/resolve/main/Hy-MT2-7B-Q4_K_M.gguf";
+
+pub const HYMT2_DOWNLOAD_URL: &str = HYMT2_1_8B_DOWNLOAD_URL;
 
 pub const LLAMA_WIN_CPU_ZIP_URL: &str =
     "https://github.com/ggml-org/llama.cpp/releases/download/b12182/llama-b12182-bin-win-cpu-x64.zip";
@@ -70,19 +75,27 @@ pub async fn ensure_model(model_path: &Path) -> Result<PathBuf> {
     }
 
     let temp_dest = model_path.with_extension("gguf.download");
+    let is_7b = model_path.to_string_lossy().to_lowercase().contains("7b");
+    let (model_label, download_url) = if is_7b {
+        ("Hy-MT2 7B (Q4_K_M)", HYMT2_7B_DOWNLOAD_URL)
+    } else {
+        ("Hy-MT2 1.8B (Q4_K_M)", HYMT2_1_8B_DOWNLOAD_URL)
+    };
+
     println!(
-        "{} Đang tải mô hình Tencent Hy-MT2 (1.8B Q4_K_M) từ Hugging Face...",
-        cli_gui_form::Icons::ARROW_DOWN
+        "{} Đang tải mô hình Tencent {} từ Hugging Face...",
+        cli_gui_form::Icons::ARROW_DOWN,
+        model_label
     );
-    println!("   URL: {}", HYMT2_DOWNLOAD_URL);
+    println!("   URL: {}", download_url);
     println!("   Đích: {:?}", model_path);
 
     let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(3600))
+        .timeout(std::time::Duration::from_secs(7200))
         .build()?;
 
     let response = client
-        .get(HYMT2_DOWNLOAD_URL)
+        .get(download_url)
         .send()
         .await
         .context("Không thể kết nối đến Hugging Face Hub")?;
