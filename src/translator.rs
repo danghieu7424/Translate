@@ -333,6 +333,7 @@ impl Translator {
                 self.options.stage2_mode.clone(),
                 self.options.stage2_model_path.clone(),
                 self.options.domain_hint.clone(),
+                Some(self.vocabulary.clone()),
                 self.options.on_progress.clone(),
             )? {
                 let mut refined_files = Vec::with_capacity(total_files);

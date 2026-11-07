@@ -9,6 +9,7 @@ use crate::engine::{HyMtConfig, HyMtWorker};
 use crate::progress::{ProgressCallback, TranslationProgress};
 use crate::subtitle::SubCue;
 use crate::translator::{format_translated_annotation, normalize_xianxia_pronouns, process_bracket_annotations};
+use crate::vocabulary::Vocabulary;
 
 /// Chế độ vận hành của Tầng 2 (Stage 2: Context Refiner & Proofreader)
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,6 +76,7 @@ pub struct Stage2Refiner {
     pub model_path: PathBuf,
     pub batch_size: usize,
     pub domain_hint: String,
+    pub vocab: Option<Vocabulary>,
     pub on_progress: Option<ProgressCallback>,
 }
 
@@ -83,6 +85,7 @@ impl Stage2Refiner {
         mode: Stage2Mode,
         custom_model: Option<PathBuf>,
         domain_hint: String,
+        vocab: Option<Vocabulary>,
         on_progress: Option<ProgressCallback>,
     ) -> Result<Option<Self>> {
         if mode == Stage2Mode::Disabled {
@@ -98,6 +101,7 @@ impl Stage2Refiner {
             model_path,
             batch_size: 10, // Gom 10 câu vào một cụm ngữ cảnh để tối ưu tốc độ suy luận CPU và mạch hội thoại
             domain_hint,
+            vocab,
             on_progress,
         }))
     }
@@ -134,14 +138,14 @@ impl Stage2Refiner {
             context_size: 4096, // Đủ lớn cho 20-30 câu song ngữ
             threads: cpu_threads,
             gpu_layers: 0,
-            temperature: 0.35,
+            temperature: 0.05, // Nhiệt độ cực thấp để loại bỏ hoàn toàn ảo giác (zero hallucination) và bám sát thuật ngữ
             max_tokens: 1500,
         };
 
         // Khởi động Native Engine cho Qwen 3.5
         let worker = HyMtWorker::new(config).await?;
         println!(
-            "✓  {} Engine đã sẵn sàng! Bắt đầu hiệu đính ngữ cảnh theo batch 20 câu...",
+            "✓  {} Engine đã sẵn sàng! Bắt đầu hiệu đính ngữ cảnh theo batch 10 câu...",
             self.mode.label()
         );
 
@@ -153,19 +157,26 @@ impl Stage2Refiner {
 
         let system_prompt = if is_xianxia {
             "You are a master Vietnamese subtitle editor for Xianxia / Donghua (Tiên hiệp, Cổ trang). \
-            Your core duty is to correct mistranslations and stiff wording in the rough draft by cross-referencing with the original Chinese dialogue.\n\
+            Your duty is to polish the rough draft into natural, fluent Vietnamese cinema dialogue while strictly preserving character relations, proper names, and Xianxia terminology.\n\
             CRITICAL RULES:\n\
             1. CHARACTER RELATION ACCURACY (DO NOT CONFUSE ROLES):\n\
-               - 爹 / 爹爹 / 父亲 = cha / phụ thân (NEVER translate as 'phu quân'!). When the daughter speaks to her father, she calls him 'cha/phụ thân' and refers to herself as 'con'.\n\
-               - 女儿 / 宝贝女儿 = con gái / con gái cưng (NEVER translate as 'thê tử'!). When a father speaks to his daughter, he calls himself 'cha/ta' and calls her 'con'.\n\
+               - 爹 / 爹爹 / 父亲 = cha / phụ thân (NEVER 'phu quân'!). When the daughter speaks to her father, she calls him 'cha/phụ thân' and refers to herself as 'con'.\n\
+               - 女儿 / 宝贝女儿 = con gái / con gái cưng (NEVER 'thê tử'!). When a father speaks to his daughter, he calls himself 'cha/ta' and calls her 'con'.\n\
                - 儿子 = con trai. 你们 = các con (khi cha nói với các con) hoặc các ngươi.\n\
                - 妻子 / 娘子 = thê tử / nương tử. 丈夫 / 夫君 = phu quân.\n\
-            2. NATURAL VIETNAMESE CINEMA DIALOGUE:\n\
-               - Fix stiff, literal word-by-word translations. Make the dialogue emotional and cinematic.\n\
-               - Translate puns and names accurately: 甜甜圈 = Bánh Donut; 草见愁 = Thảo Kiến Sầu; 和离 = hòa ly.\n\
-            3. PRONOUNS:\n\
+            2. ZERO TOLERANCE FOR HALLUCINATION & PINYIN (STRICT ENFORCEMENT):\n\
+               - NEVER output Pinyin or Romanized names (NEVER 'Lu Zi Xuan', 'Qing Ying', 'Minh'). Must use Hán-Việt: 'Lục Tử Huyên', 'Từ Thanh Oánh', 'Lục Miểu Miểu'.\n\
+               - NEVER distort character names: 陆淼淼 / 淼淼 is 'Lục Miểu Miểu' or 'Miểu Miểu' (NEVER 'Mèo Mèo').\n\
+               - NEVER modernize Xianxia concepts into modern technology or everyday colloquial terms:\n\
+                 * 传音 MUST be 'truyền âm' (NEVER 'tin nhắn').\n\
+                 * 识海 MUST be 'thức hải' (NEVER 'biển nhớ' or 'biển tri thức').\n\
+                 * 称帝 MUST be 'xưng đế' (NEVER 'đế đô').\n\
+                 * 无垢帝位 MUST be 'Vô Cấu Đế Vị' (NEVER 'Vô Thù Đế' or 'Vô Độ Thần').\n\
+                 * 藏 MUST be 'ẩn nấp' / 'ẩn giấu' (NEVER 'Nấu').\n\
+                 * 甜甜圈 is 'Bánh Donut'; 草见愁 is 'Thảo Kiến Sầu'; 和离 is 'hòa ly'.\n\
+            3. CINEMATIC DIALOGUE:\n\
+               - Make the dialogue emotional and natural. Fix stiff word-by-word phrasing.\n\
                - Use classical pronouns: ta, ngươi, con, cha, mẫu thân, huynh, đệ, tỷ, muội.\n\
-               - NEVER use modern pronouns: tôi, bạn, người vợ, phụ nữ.\n\
             4. SUBTITLE BRACKETS:\n\
                - If a line has brackets 〈...〉 (e.g. 〈Lục Thanh An〉, 〈Hệ thống〉), you MUST PRESERVE the brackets 〈...〉 exactly.\n\
             5. FORMAT:\n\
@@ -210,6 +221,18 @@ impl Stage2Refiner {
                 });
             }
 
+            // Trích xuất các thuật ngữ bắt buộc xuất hiện trong batch câu hiện tại
+            let batch_zh_all = chunk_cues.iter().map(|c| c.text.as_str()).collect::<Vec<_>>().join(" ");
+            let vocab_note = if let Some(ref v) = self.vocab {
+                if let Some(inst) = v.format_prompt_hint(&batch_zh_all) {
+                    format!("MANDATORY VOCABULARY MAPPING (STRICTLY USE THESE EXACT VIETNAMESE WORDS - DO NOT INVENT OR CHANGE):\n{}\n\n", inst)
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
+            };
+
             // Xây dựng prompt gồm bản gốc tiếng Trung và bản dịch thô Tầng 1
             let mut prompt_lines = String::new();
             for i in 0..chunk_len {
@@ -220,12 +243,12 @@ impl Stage2Refiner {
             }
 
             let user_prompt = format!(
-                "Below are {} numbered subtitle lines. For each line, cross-reference the original Chinese [Gốc] with the rough draft [Bản thô] to rewrite into smooth, natural Vietnamese cinema dialogue.\n\
+                "{}Below are {} numbered subtitle lines. For each line, cross-reference the original Chinese [Gốc] with the rough draft [Bản thô] to rewrite into smooth, natural Vietnamese cinema dialogue.\n\
                 STRICT REQUIREMENTS:\n\
                 1. Output EXACTLY {} lines (1. ... 2. ...). Each line must contain ONLY the Vietnamese dialogue.\n\
-                2. NEVER output Chinese characters. Everything MUST be in Vietnamese.\n\
+                2. NEVER output Chinese characters or Pinyin. Everything MUST be in natural Vietnamese.\n\
                 3. Do NOT include tags like 'Gốc' or 'Bản thô' or arrows like '->'.\n\n{}",
-                chunk_len, chunk_len, prompt_lines
+                vocab_note, chunk_len, chunk_len, prompt_lines
             );
 
             let raw_res = worker
@@ -298,7 +321,14 @@ impl Stage2Refiner {
                     } else {
                         valid_text.to_string()
                     };
-                    format_translated_annotation(&normalized, is_annotation)
+
+                    let post_corrected = if let Some(ref v) = self.vocab {
+                        v.apply_post_corrections(&normalized, &cue.text)
+                    } else {
+                        normalized
+                    };
+
+                    format_translated_annotation(&post_corrected, is_annotation)
                 } else {
                     // Fallback từng câu đơn lẻ: Giữ bản dịch Tầng 1
                     draft_text.clone()
