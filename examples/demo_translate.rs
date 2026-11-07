@@ -35,15 +35,10 @@ async fn main() -> anyhow::Result<()> {
     });
 
     // 3. Thiết lập các tham số dịch thuật:
-    // Hỗ trợ cả 2 trường hợp nhập liệu:
-    //   - Trường hợp A: Thư mục chứa nhiều file: cargo run --release --example demo_translate -- input
-    //   - Trường hợp B: Một file duy nhất: cargo run --release --example demo_translate -- input/第001集.zh.vtt
-    let args: Vec<String> = std::env::args().collect();
-    let input_path = if args.len() > 1 {
-        PathBuf::from(&args[1])
-    } else {
-        PathBuf::from("input/第001集.zh.vtt") // Mặc định chạy 1 file để kiểm tra nhanh
-    };
+    // Hỗ trợ cả 2 trường hợp:
+    //   - Trường hợp A: Thư mục chứa nhiều file (ví dụ: PathBuf::from("input"))
+    //   - Trường hợp B: Một file duy nhất (ví dụ: PathBuf::from("input/第001集.zh.vtt"))
+    let input_path = PathBuf::from("input/第001集.zh.vtt"); // Thử nghiệm với 1 file đầu tiên để test tốc độ
     let output_dir = PathBuf::from("output");
     let vocabulary_path = PathBuf::from("vocabulary.txt");
 
