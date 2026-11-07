@@ -17,13 +17,13 @@
 老公 = phu quân
 女人 = nữ nhân
 男人 = nam nhân
-哥 = ca ca
+哥 = ca
 哥哥 = ca ca
-弟 = đệ đệ
+弟 = đệ
 弟弟 = đệ đệ
-姐 = tỷ tỷ
+姐 = tỷ
 姐姐 = tỷ tỷ
-妹 = muội muội
+妹 = muội
 妹妹 = muội muội
 儿子 = con trai
 女儿 = con gái
