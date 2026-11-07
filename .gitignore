@@ -1,0 +1,7 @@
+target/
+cli_gui_form/
+
+*.vtt
+*.srt
+*.lock
+*.gguf

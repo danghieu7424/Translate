@@ -1,0 +1,60 @@
+[package]
+name = "aidub"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# CLI & Error handling
+clap = { version = "4.4", features = ["derive"] }
+anyhow = "1.0"
+
+# TUI Form & Terminal UI
+cli_gui_form = { path = "./cli_gui_form" }
+ratatui = "0.28"
+crossterm = "0.28"
+
+# Audio I/O
+hound = "3.5"
+
+# VAD (Pure Rust, zero ONNX, 3600x RTF)
+earshot = "1.2.2"
+
+# ASR Engine 1: Sherpa-ONNX SenseVoice
+sherpa-onnx = { version = "1.13.8", default-features = false, features = ["shared"] }
+
+# ASR Engine 2: Whisper.cpp via Rust bindings
+whisper-rs = { version = "0.16.0", features = ["vulkan"] }
+
+# Audio Source Separation (MDX-Net Kim Vocal 2, Pure Rust + ONNX Runtime + FFT)
+rustfft = "6.2"
+stem-splitter-core = "1.2"
+
+# Model auto-download from HuggingFace
+hf-hub = "0.3.2"
+
+# Regex for STT term normalization
+regex = "1.10"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Progress bar cho download/processing
+indicatif = "0.17"
+
+# HTTP client & Async Runtime for Translation & API Services
+reqwest = { version = "0.12", features = ["json"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+
+# Parallel processing for TTS generation
+rayon = "1.10"
+
+# ONNX Runtime & Math for In-tree VieNeu-TTS Engine
+ort = "2.0.0-rc.11"
+ndarray = "0.15"
+ndarray-npy = "0.8"
+rand = "0.8"
+rand_distr = "0.4"
+lazy_static = "1.4"
+tokenizers = { version = "0.23.2", default-features = false, features = ["onig"] }
+opencv = { version = "0.101.1", features = ["imgproc", "clang-runtime"] }
