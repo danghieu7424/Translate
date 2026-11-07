@@ -114,6 +114,8 @@ impl HyMtWorker {
             .arg(config.context_size.to_string())
             .arg("-t")
             .arg(config.threads.to_string())
+            .arg("--reasoning")
+            .arg("off")
             .arg("--log-disable");
 
         if config.gpu_layers > 0 {
@@ -128,7 +130,7 @@ impl HyMtWorker {
             .with_context(|| format!("Không thể khởi chạy engine tại {:?}", server_bin))?;
 
         let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(60))
+            .timeout(Duration::from_secs(300))
             .build()?;
 
         // Đợi server nạp weights vào RAM
@@ -164,6 +166,10 @@ impl HyMtWorker {
         })
     }
 
+    pub fn port(&self) -> u16 {
+        self.port
+    }
+
     /// Gửi yêu cầu dịch câu qua HTTP Loopback với ngữ cảnh và chỉ thị từ vựng
     pub async fn translate(
         &self,
@@ -187,9 +193,12 @@ impl HyMtWorker {
             || hint_lower.contains("urban");
 
         let style_directive = if is_xianxia {
-            "Translate the Chinese text to Vietnamese in classical Tu Tiên/Xianxia novel style. \
-            STRICTLY preserve accurate family roles: 爹/爹爹/父亲=cha/phụ thân, 娘/母亲=mẹ/mẫu thân, 女儿=con gái, 儿子=con trai (NEVER confuse father-daughter with husband-wife). \
-            Use classical Sino-Vietnamese pronouns (我=ta, 你=ngươi, 修为=tu vi, 杀戮=sát lục; NEVER use modern pronouns: tôi, bạn, người vợ). \
+            "Translate the Chinese subtitle line to natural Vietnamese in classical Tu Tiên/Xianxia style. \
+            RULES FOR PRONOUNS & ROLES: \
+            - Child to father: 爹/爹爹=cha, 我=con (e.g. 有爹在去哪我都不怕 -> Có cha ở đây, đi đâu con cũng không sợ). \
+            - Father to child: 爹/爹爹=cha (self), 你=con (e.g. 爹爹给你好东西 -> Cha cho con món đồ tốt; 爹爹早就无敌了 -> Cha từ lâu đã vô địch rồi). \
+            - Between adults: 我=ta, 你=ngươi, 妻子=thê tử, 夫君=phu quân. NEVER use modern pronouns: tôi, bạn. \
+            - Make the Vietnamese sentence natural, fluent, and cinematic (avoid stiff word-by-word phrasing). \
             Output ONLY the Vietnamese translation"
         } else if is_modern {
             "Translate to Vietnamese in modern daily life/urban register (STRICTLY use modern natural pronouns: anh/em, tôi/bạn, cậu/tớ; NEVER use archaic pronouns: tại hạ, bổn tọa, phu quân, thê tử). Output ONLY the Vietnamese translation"
@@ -268,9 +277,12 @@ impl HyMtWorker {
             || hint_lower.contains("urban");
 
         let style_directive = if is_xianxia {
-            "Translate each numbered Chinese line to Vietnamese in classical Tu Tiên/Xianxia novel style. \
-            STRICTLY preserve accurate family roles: 爹/爹爹/父亲=cha/phụ thân, 娘/母亲=mẹ/mẫu thân, 女儿=con gái, 儿子=con trai (NEVER confuse father-daughter with husband-wife). \
-            Use classical Sino-Vietnamese pronouns (我=ta, 你=ngươi, 修为=tu vi, 杀戮=sát lục; NEVER use modern pronouns: tôi, bạn). \
+            "Translate each numbered Chinese subtitle line to natural Vietnamese in classical Tu Tiên/Xianxia style. \
+            RULES FOR PRONOUNS & ROLES: \
+            - Child to father: 爹/爹爹=cha, 我=con (e.g. 有爹在去哪我都不怕 -> Có cha ở đây, đi đâu con cũng không sợ). \
+            - Father to child: 爹/爹爹=cha (self), 你=con (e.g. 爹爹给你好东西 -> Cha cho con món đồ tốt; 爹爹早就无敌了 -> Cha từ lâu đã vô địch rồi). \
+            - Between adults: 我=ta, 你=ngươi, 妻子=thê tử, 夫君=phu quân. NEVER use modern pronouns: tôi, bạn. \
+            - Make the Vietnamese sentence natural, fluent, and cinematic (avoid stiff word-by-word phrasing). \
             Output EXACTLY the same numbered lines (1. ... 2. ...)"
         } else if is_modern {
             "Translate each numbered Chinese line to Vietnamese in modern register. Output EXACTLY the same numbered lines (1. ... 2. ...)"

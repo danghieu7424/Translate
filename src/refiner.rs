@@ -96,7 +96,7 @@ impl Stage2Refiner {
         Ok(Some(Self {
             mode,
             model_path,
-            batch_size: 20, // Gom 20 câu vào một cụm ngữ cảnh để LLM hiểu mạch hội thoại
+            batch_size: 10, // Gom 10 câu vào một cụm ngữ cảnh để tối ưu tốc độ suy luận CPU và mạch hội thoại
             domain_hint,
             on_progress,
         }))
@@ -216,12 +216,15 @@ impl Stage2Refiner {
                 let abs_i = start_idx + i;
                 let zh = &cues[abs_i].text;
                 let vi_draft = &stage1_translations[abs_i];
-                prompt_lines.push_str(&format!("{}. [Gốc: {}] -> [Bản thô: {}]\n", i + 1, zh, vi_draft));
+                prompt_lines.push_str(&format!("{}. [Gốc]: {} | [Bản thô]: {}\n", i + 1, zh, vi_draft));
             }
 
             let user_prompt = format!(
-                "Below are {} numbered subtitle lines. Polish and naturalize the Vietnamese dialogue.\n\
-                Output EXACTLY {} numbered lines (1. ... 2. ...) with ONLY the polished Vietnamese text:\n\n{}",
+                "Below are {} numbered subtitle lines. For each line, cross-reference the original Chinese [Gốc] with the rough draft [Bản thô] to rewrite into smooth, natural Vietnamese cinema dialogue.\n\
+                STRICT REQUIREMENTS:\n\
+                1. Output EXACTLY {} lines (1. ... 2. ...). Each line must contain ONLY the Vietnamese dialogue.\n\
+                2. NEVER output Chinese characters. Everything MUST be in Vietnamese.\n\
+                3. Do NOT include tags like 'Gốc' or 'Bản thô' or arrows like '->'.\n\n{}",
                 chunk_len, chunk_len, prompt_lines
             );
 
@@ -232,7 +235,13 @@ impl Stage2Refiner {
             // Bóc tách kết quả đánh số
             let mut parsed_lines = vec![None; chunk_len];
             if let Ok(response_text) = raw_res {
-                for line in response_text.lines() {
+                let clean_text = if let Some(idx) = response_text.find("</think>") {
+                    &response_text[idx + 8..]
+                } else {
+                    &response_text
+                };
+
+                for line in clean_text.lines() {
                     let trimmed = line.trim();
                     if trimmed.is_empty() {
                         continue;
@@ -257,29 +266,47 @@ impl Stage2Refiner {
                 }
             }
 
-            // Kiểm tra số dòng: Nếu đủ đúng chunk_len câu -> áp dụng; nếu thiếu -> an toàn giữ bản dịch Tầng 1
-            let is_perfect_match = parsed_lines.iter().all(|item| item.is_some());
-
             for (rel_i, cue) in chunk_cues.iter().enumerate() {
                 let abs_i = start_idx + rel_i;
                 let draft_text = &stage1_translations[abs_i];
                 let (is_annotation, _) = process_bracket_annotations(&cue.text);
 
-                let refined_text = if is_perfect_match {
-                    let text = parsed_lines[rel_i].as_ref().unwrap();
-                    let normalized = if is_xianxia {
-                        normalize_xianxia_pronouns(text)
+                let refined_text = if let Some(text) = &parsed_lines[rel_i] {
+                    // Loại bỏ các tiền tố [Gốc: ...] -> [Bản thô: ...] nếu mô hình trích dẫn lại
+                    let mut cleaned_item = text.trim();
+                    if let Some(pos) = cleaned_item.rfind("->") {
+                        cleaned_item = cleaned_item[pos + 2..].trim();
+                    }
+                    if let Some(pos) = cleaned_item.find("Bản dịch:") {
+                        cleaned_item = cleaned_item[pos + 9..].trim();
+                    } else if let Some(pos) = cleaned_item.find("Bản thô:") {
+                        cleaned_item = cleaned_item[pos + 8..].trim();
+                    }
+                    let cleaned_str = cleaned_item.trim_matches('[').trim_matches(']').trim();
+
+                    // Kiểm tra xem dòng có vô tình chứa ký tự tiếng Trung không
+                    let has_chinese = cleaned_str.chars().any(|c| ('\u{4e00}'..='\u{9fff}').contains(&c));
+
+                    let valid_text = if !cleaned_str.is_empty() && !has_chinese {
+                        cleaned_str
                     } else {
-                        text.to_string()
+                        draft_text.as_str()
+                    };
+
+                    let normalized = if is_xianxia {
+                        normalize_xianxia_pronouns(valid_text)
+                    } else {
+                        valid_text.to_string()
                     };
                     format_translated_annotation(&normalized, is_annotation)
                 } else {
-                    // Fallback an toàn: Giữ bản dịch Tầng 1
+                    // Fallback từng câu đơn lẻ: Giữ bản dịch Tầng 1
                     draft_text.clone()
                 };
 
                 if let Some(ref cb) = self.on_progress {
                     let cur_num = abs_i + 1;
+                    let is_refined = parsed_lines[rel_i].is_some();
                     cb(TranslationProgress {
                         task_id: "stage2_task".to_string(),
                         label: format!("Stage 2: {}", self.mode.label()),
@@ -287,7 +314,7 @@ impl Stage2Refiner {
                         total: total_cues,
                         unit: "câu".to_string(),
                         duration: format!("{:02}:{:02}", start_time.elapsed().as_secs() / 60, start_time.elapsed().as_secs() % 60),
-                        status: if is_perfect_match {
+                        status: if is_refined {
                             format!("[{}] Đã trau chuốt câu #{}/{}", self.mode.label(), cur_num, total_cues)
                         } else {
                             format!("[{} Fallback Tầng 1] Giữ câu #{}/{}", self.mode.label(), cur_num, total_cues)
