@@ -13,12 +13,20 @@ pub const HYMT2_1_8B_DOWNLOAD_URL: &str =
 pub const HYMT2_7B_DOWNLOAD_URL: &str =
     "https://huggingface.co/tencent/Hy-MT2-7B-GGUF/resolve/main/Hy-MT2-7B-Q4_K_M.gguf";
 
+pub const QWEN35_4B_GGUF_FILE: &str = "Qwen3.5-4B-Q4_K_M.gguf";
+pub const QWEN35_4B_DOWNLOAD_URL: &str =
+    "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf";
+
+pub const QWEN35_9B_GGUF_FILE: &str = "Qwen3.5-9B-Q4_K_M.gguf";
+pub const QWEN35_9B_DOWNLOAD_URL: &str =
+    "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf";
+
 pub const HYMT2_DOWNLOAD_URL: &str = HYMT2_1_8B_DOWNLOAD_URL;
 
 pub const LLAMA_WIN_CPU_ZIP_URL: &str =
     "https://github.com/ggml-org/llama.cpp/releases/download/b12182/llama-b12182-bin-win-cpu-x64.zip";
 
-/// Đảm bảo mô hình Hy-MT2 GGUF tồn tại tại đường dẫn chỉ định.
+/// Đảm bảo mô hình Hy-MT2 hoặc Qwen 3.5 GGUF tồn tại tại đường dẫn chỉ định.
 /// Nếu chưa có, tự động tải từ Hugging Face Hub.
 ///
 /// Ví dụ sử dụng theo đúng chuẩn yêu cầu:
@@ -36,11 +44,21 @@ pub async fn ensure_model(model_path: &Path) -> Result<PathBuf> {
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or(HYMT2_GGUF_FILE);
-    let is_7b = filename.to_lowercase().contains("7b");
-    let min_valid_size: u64 = if is_7b {
-        3 * 1024 * 1024 * 1024 // 7B Q4_K_M phải > 3GB (thực tế ~4.62GB)
+
+    let fn_lower = filename.to_lowercase();
+    let is_qwen = fn_lower.contains("qwen");
+    let is_9b = fn_lower.contains("9b");
+    let is_7b = fn_lower.contains("7b");
+    let is_4b = fn_lower.contains("4b");
+
+    let (model_label, download_url, min_valid_size) = if is_qwen && is_9b {
+        ("Alibaba Qwen 3.5 9B (Master Mode)", QWEN35_9B_DOWNLOAD_URL, 4 * 1024 * 1024 * 1024u64)
+    } else if is_qwen && is_4b {
+        ("Alibaba Qwen 3.5 4B (Turbo Mode)", QWEN35_4B_DOWNLOAD_URL, 2 * 1024 * 1024 * 1024u64)
+    } else if is_7b {
+        ("Tencent Hy-MT2 7B (Q4_K_M)", HYMT2_7B_DOWNLOAD_URL, 3 * 1024 * 1024 * 1024u64)
     } else {
-        500 * 1024 * 1024 // 1.8B Q4_K_M ~1.13GB
+        ("Tencent Hy-MT2 1.8B (Q4_K_M)", HYMT2_1_8B_DOWNLOAD_URL, 500 * 1024 * 1024u64)
     };
 
     // 1. Kiểm tra nếu file đã tồn tại và kích thước hợp lệ
@@ -66,6 +84,7 @@ pub async fn ensure_model(model_path: &Path) -> Result<PathBuf> {
         PathBuf::from("models").join(filename),
         PathBuf::from("../models").join(filename),
         PathBuf::from("models/hymt2").join(filename),
+        PathBuf::from("models/qwen").join(filename),
     ];
 
     for cand in &candidate_paths {
@@ -76,7 +95,7 @@ pub async fn ensure_model(model_path: &Path) -> Result<PathBuf> {
                         fs::create_dir_all(parent)?;
                     }
                     println!(
-                        "[Hy-MT2] Đã tìm thấy mô hình đúng tại {:?}, sao chép tới {:?}",
+                        "[Model Downloader] Đã tìm thấy mô hình đúng tại {:?}, sao chép tới {:?}",
                         cand, model_path
                     );
                     let _ = fs::copy(cand, model_path);
@@ -95,15 +114,9 @@ pub async fn ensure_model(model_path: &Path) -> Result<PathBuf> {
     }
 
     let temp_dest = model_path.with_extension("gguf.download");
-    let is_7b = model_path.to_string_lossy().to_lowercase().contains("7b");
-    let (model_label, download_url) = if is_7b {
-        ("Hy-MT2 7B (Q4_K_M)", HYMT2_7B_DOWNLOAD_URL)
-    } else {
-        ("Hy-MT2 1.8B (Q4_K_M)", HYMT2_1_8B_DOWNLOAD_URL)
-    };
 
     println!(
-        "{} Đang tải mô hình Tencent {} từ Hugging Face...",
+        "{} Đang tải mô hình {} từ Hugging Face...",
         cli_gui_form::Icons::ARROW_DOWN,
         model_label
     );

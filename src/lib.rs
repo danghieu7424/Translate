@@ -13,6 +13,7 @@
 pub mod downloader;
 pub mod engine;
 pub mod progress;
+pub mod refiner;
 pub mod subtitle;
 pub mod translator;
 pub mod vocabulary;
@@ -21,6 +22,7 @@ pub use cli_gui_form::{Icons, ProgressStyle, Theme};
 pub use downloader::ensure_model;
 pub use engine::{HyMtConfig, HyMtWorker};
 pub use progress::{ProgressCallback, TerminalProgressPrinter, TranslationProgress};
+pub use refiner::{Stage1Checkpoint, Stage2Mode, Stage2Refiner};
 pub use subtitle::{
     format_timestamp, parse_subtitle_file, parse_timestamp, save_subtitle_file, SubtitleCue,
     SubtitleFormat,

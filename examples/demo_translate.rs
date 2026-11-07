@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use translate::{
-    ensure_hymt2_model, ProgressStyle, TerminalProgressPrinter, TranslationOptions,
+    ensure_hymt2_model, ProgressStyle, Stage2Mode, TerminalProgressPrinter, TranslationOptions,
     TranslationProgress, Translator,
 };
 
@@ -18,9 +18,19 @@ async fn main() -> anyhow::Result<()> {
     };
     let model = Path::new(model_str);
 
+    // Kiểm tra cờ Tầng 2 (Qwen 3.5 4B Turbo hoặc 9B Master)
+    let stage2_mode = if args.iter().any(|a| a == "--stage2-4b" || a == "--4b") {
+        Stage2Mode::Turbo4B
+    } else if args.iter().any(|a| a == "--stage2-9b" || a == "--9b") {
+        Stage2Mode::Master9B
+    } else {
+        Stage2Mode::Disabled
+    };
+
     println!(
-        "=== CHƯƠNG TRÌNH DỊCH THUẬT PHỤ ĐỀ [{}] ===",
-        if use_1_8b { "TENCENT HY-MT2 1.8B" } else { "TENCENT HY-MT2 7B" }
+        "=== CHƯƠNG TRÌNH DỊCH THUẬT PHỤ ĐỀ [TẦNG 1: {} | TẦNG 2: {}] ===",
+        if use_1_8b { "HY-MT2 1.8B" } else { "HY-MT2 7B" },
+        stage2_mode.label()
     );
 
     if !model.exists() {
@@ -77,6 +87,8 @@ async fn main() -> anyhow::Result<()> {
         hymt_config: None,
         on_progress: Some(on_progress),
         batch_size: 10,
+        stage2_mode,
+        stage2_model_path: None,
     };
 
     let translator = Translator::new(options);

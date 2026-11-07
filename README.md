@@ -170,6 +170,9 @@ async fn main() -> anyhow::Result<()> {
         hymt_config: None,
         on_progress: Some(on_progress),
         batch_size: 10, // Dịch 10 câu/lô (tăng tốc gấp 3-5 lần)
+        // Kích hoạt Tầng 2 (Qwen 3.5 4B Turbo hoặc 9B Master):
+        stage2_mode: translate::Stage2Mode::Turbo4B, // hoặc Stage2Mode::Master9B, Stage2Mode::Disabled
+        stage2_model_path: None,
     };
 
     let translator = Translator::new(options);
@@ -182,17 +185,27 @@ async fn main() -> anyhow::Result<()> {
 
 ---
 
-## ⚡ Chạy Ví Dụ Kiểm Thử Tối Ưu Tốc Độ
+## ⚡ Các Lệnh Chạy Thực Nghiệm (CLI Commands)
 
 Biên dịch và chạy example với cờ `--release` để đạt tốc độ suy luận C++ tối đa:
 
-```bash
-cargo run --release --example demo_translate
+```powershell
+# 1. Dịch chuẩn chất lượng cao nhất (Tầng 1: Hy-MT2 7B + Tầng 2: Qwen 3.5 9B Master):
+cargo run --release --example demo_translate -- --stage2-9b
+
+# 2. Dịch cày phim nghìn tập siêu tốc (Tầng 1: Hy-MT2 1.8B + Tầng 2: Qwen 3.5 4B Turbo):
+cargo run --release --example demo_translate -- --1.8b --stage2-4b input
+
+# 3. Chỉ chạy dịch nhanh Tầng 1 (Bỏ qua Tầng 2):
+cargo run --release --example demo_translate -- --1.8b input
 ```
 
-Tiến trình dịch phong cách Cyberpunk sẽ hiển thị trực quan:
+Tiến trình dịch phong cách Cyberpunk hiển thị trực quan:
 ```text
-▶  [第001集.zh.vtt]  Hy-MT2 Translation Engine: ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰ 100% [69/69 câu (00:41)] - [HY-MT2] Dịch câu #69/69 ▹ [tu tiên, donghua, cổ trang hán việt]
+▶  [第001集.zh.vtt]  Stage 1: Hy-MT2 Engine: ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰ 100% [69/69 câu (00:52)] - [HY-MT2 Batch] Dịch câu #69/69
+✓  Đã hoàn thành Tầng 1 và giải phóng RAM của Hy-MT2.
+▶  [第001集.zh.vtt]  Stage 2: Qwen 3.5 4B (Turbo): ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰ 100% [69/69 câu]
+✓  Hoàn tất Tầng 2 [Qwen 3.5 4B (Turbo)]. Đang tự động thu hồi RAM Qwen...
 ```
 
 ---

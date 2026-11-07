@@ -36,6 +36,8 @@ pub struct SubtitleCue {
     pub text: String,
 }
 
+pub type SubCue = SubtitleCue;
+
 /// Chuyển đổi timestamp dạng hh:mm:ss.mmm hoặc mm:ss.mmm sang millisecond
 pub fn parse_timestamp(s: &str) -> Option<usize> {
     let clean = s.trim().replace(',', ".");

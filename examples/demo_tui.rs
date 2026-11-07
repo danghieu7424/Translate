@@ -20,7 +20,7 @@ use std::{
 };
 use tokio::sync::mpsc;
 use translate::{
-    ensure_hymt2_model, TranslationOptions, TranslationProgress, Translator,
+    ensure_hymt2_model, Stage2Mode, TranslationOptions, TranslationProgress, Translator,
 };
 
 #[tokio::main]
@@ -87,6 +87,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let _ = tx.send(p);
         })),
         batch_size: 10,
+        stage2_mode: Stage2Mode::Disabled,
+        stage2_model_path: None,
     };
 
     // Chạy tiến trình dịch ở background task

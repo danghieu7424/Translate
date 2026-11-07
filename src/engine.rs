@@ -368,6 +368,48 @@ impl HyMtWorker {
             Ok(None)
         }
     }
+
+    /// Gửi truy vấn hoàn thiện hội thoại tổng quát (Dùng cho Tầng 2 Qwen 3.5 và các tác vụ LLM khác)
+    pub async fn chat_complete(
+        &self,
+        system_prompt: Option<&str>,
+        user_prompt: &str,
+        max_tokens: usize,
+    ) -> Result<String> {
+        let mut messages = Vec::new();
+        if let Some(sys) = system_prompt {
+            messages.push(serde_json::json!({ "role": "system", "content": sys }));
+        }
+        messages.push(serde_json::json!({ "role": "user", "content": user_prompt }));
+
+        let body = serde_json::json!({
+            "messages": messages,
+            "temperature": self.config.temperature,
+            "max_tokens": max_tokens
+        });
+
+        let url = format!("http://127.0.0.1:{}/v1/chat/completions", self.port);
+        let resp = self
+            .client
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .context("Lỗi kết nối tới Native Engine qua chat_complete")?;
+
+        let parsed: ChatCompletionResponse = resp
+            .json()
+            .await
+            .context("Lỗi đọc dữ liệu JSON từ Native Engine qua chat_complete")?;
+
+        let raw = parsed
+            .choices
+            .first()
+            .map(|c| c.message.content.trim().to_string())
+            .unwrap_or_default();
+
+        Ok(raw)
+    }
 }
 
 impl Drop for HyMtWorker {
