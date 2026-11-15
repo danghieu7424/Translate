@@ -4,7 +4,7 @@
 
 Stage 1 dùng model dịch Hy-MT2-30B-A3B GGUF Q4_K_M với batch mặc định 10 cue. Stage 2 dùng Qwen-30B-A3B GGUF Q4_K_M với batch mặc định 20 cue. Endpoint và tên model được cấu hình riêng cho mỗi stage để hỗ trợ server độc lập hoặc server có cơ chế đổi model. Tên model trong tài liệu là mục tiêu cấu hình; client không giả định model đã cài hoặc server đã sẵn sàng.
 
-Tham số sampler khởi điểm: `temperature = 0.15`, `top_p = 0.9`, `repeat_penalty = 1.15`, `frequency_penalty = 0.2`. Server có thể không hỗ trợ mọi trường riêng (đặc biệt `repeat_penalty` của llama.cpp); client phải ánh xạ theo giao thức backend hoặc báo cấu hình không được hỗ trợ, không được âm thầm tuyên bố đã áp dụng. Giới hạn token, timeout và giới hạn request cần cấu hình rõ.
+Tham số sampler mặc định: `temperature = 0.15`, `top_p = 0.9`, `repeat_penalty = 1.15`, `frequency_penalty = 0.2`. Client gửi cả bốn trường ở cấp request; `repeat_penalty` là tham số backend-specific và server có thể từ chối hoặc bỏ qua trường không hỗ trợ. `base_url` chấp nhận origin, `/v1` hoặc endpoint `/v1/chat/completions`. Timeout request mặc định 600 giây và không cho đặt thấp hơn 300 giây; connect timeout mặc định 15 giây.
 
 ## Stage 1 — Draft
 
@@ -43,9 +43,9 @@ JSON Schema yêu cầu object có `edits` là mảng; mỗi phần tử có `id`
 
 ## HTTP, response format và kiểm tra
 
-Client gọi OpenAI-compatible `POST /v1/chat/completions` qua `tokio`/`reqwest`. Tầng 2 yêu cầu `response_format` `json_schema` nếu backend hỗ trợ, nếu không thì `json_object`; bất kể response format nào, luôn parse và validate JSON cục bộ. `frequency_penalty` và các tham số backend-specific chỉ gửi khi tương thích với server.
+Client gửi OpenAI-compatible `POST /v1/chat/completions` qua `reqwest`, hỗ trợ `response_format: {"type":"json_object"}` và `response_format: {"type":"json_schema","json_schema":{"name":...,"strict":true,"schema":...}}`. Client truyền schema đúng nguyên dạng; server phải hỗ trợ response format tương ứng để ràng buộc đầu ra. Engine vẫn phải parse và validate nội dung JSON cục bộ vì server có thể không thực thi hoặc không hỗ trợ schema.
 
-Thử lại tối đa 3 lần sau lần gọi đầu cho lỗi transport tạm thời hoặc phản hồi không parse/không hợp lệ (tối đa 4 lần gọi); không retry vô hạn. Nếu lỗi xác thực phản hồi sau retry, chia đôi batch và xử lý từng nửa. Khi chỉ còn một cue mà vẫn lỗi, trả lỗi rõ ràng. Đối với Stage 2, chỉ lỗi JSON/schema/ID ngoài batch là invalid; edits rỗng hoặc thiếu ID là kết quả hợp lệ. Retry/split không được làm mất cue hoặc áp dụng một phần patch chưa validate.
+Client không retry ngầm: lỗi transport/timeout, HTTP status, JSON response không hợp lệ hoặc thiếu content được trả rõ cho caller. Engine chịu trách nhiệm thử lại tối đa 3 lần sau lần gọi đầu khi lỗi phù hợp, kiểm tra đầu ra theo batch rồi chia đôi batch lỗi; khi chỉ còn một cue mà vẫn lỗi, trả lỗi rõ ràng. Đối với Stage 2, chỉ lỗi JSON/schema/ID ngoài batch là invalid; edits rỗng hoặc thiếu ID là kết quả hợp lệ. Retry/split không được làm mất cue hoặc áp dụng một phần patch chưa validate.
 
 ## Hoàn tất và tiếp tục
 
