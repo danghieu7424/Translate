@@ -55,6 +55,12 @@ Thư viện Rust tối ưu hóa hiệu năng cao để dịch phụ đề WebVTT
 
 ```text
 Translate/
+├── crates/                # Khung workspace VTT hai tầng (chưa triển khai logic)
+│   ├── vtt-core/
+│   ├── llm-client/
+│   ├── translator-engine/
+│   └── vtt-cli/
+├── docs/                   # Phương pháp WebVTT, kiến trúc và luồng pipeline
 ├── cli_gui_form/           # Thư viện TUI chuẩn
 ├── hymt_bin/               # Binary Native C++ engine (llama-server.exe & dlls)
 ├── input/                  # Thư mục phụ đề gốc (.vtt, .srt)
@@ -76,6 +82,17 @@ Translate/
 ├── Cargo.toml
 ├── LICENSE                 # Giấy phép MIT
 └── README.md
+```
+
+Các crate mới hiện chỉ là khung workspace; parser round-trip, client Local LLM, pipeline hai tầng và CLI `vtt-trans` chưa được triển khai. Package `translate` hiện hữu vẫn được giữ nguyên. Thiết kế và phạm vi từng giai đoạn được ghi trong `docs/`.
+
+### Lệnh kiểm tra workspace
+
+```powershell
+cargo fmt --all -- --check
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+cargo audit
 ```
 
 ---

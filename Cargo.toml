@@ -1,10 +1,19 @@
 [package]
 name = "translate"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 authors = ["Antigravity"]
 description = "High-performance subtitle translation library powered by Tencent Hy-MT2 1.8B GGUF with vocabulary pronoun management and cli_gui_form TUI progress integration"
 license = "MIT"
+
+[workspace]
+members = [
+    "crates/vtt-core",
+    "crates/llm-client",
+    "crates/translator-engine",
+    "crates/vtt-cli",
+]
+resolver = "3"
 
 [dependencies]
 cli_gui_form = { path = "./cli_gui_form" }

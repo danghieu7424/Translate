@@ -7,3 +7,4 @@ hymt_bin/
 *.srt
 *.lock
 *.gguf
+graphify-out/
