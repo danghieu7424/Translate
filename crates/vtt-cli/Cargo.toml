@@ -5,16 +5,16 @@ edition = "2024"
 license = "MIT"
 
 [dependencies]
-anyhow = "1"
-clap = { version = "4", features = ["derive"] }
-indicatif = "0.18"
-llm-client = { path = "../llm-client" }
-translator-engine = { path = "../translator-engine" }
-vtt-core = { path = "../vtt-core" }
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+anyhow.workspace = true
+clap.workspace = true
+indicatif.workspace = true
+llm-client.workspace = true
+tokio.workspace = true
+translator-engine.workspace = true
+vtt-core.workspace = true
 
 [dev-dependencies]
-tempfile = "3"
+tempfile.workspace = true
 
 [[bin]]
 name = "vtt-trans"

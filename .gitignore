@@ -1,10 +1,12 @@
-target/
-cli_gui_form/
-output/
-hymt_bin/
+/target/
+/work/
+/output/
+/graphify-out/
+/in/
+/input/
+/.agents/
+/models/*.gguf
+/hymt_bin/*.exe
+/hymt_bin/*.dll
 
-*.vtt
 *.srt
-*.lock
-*.gguf
-graphify-out/
