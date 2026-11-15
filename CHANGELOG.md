@@ -11,3 +11,5 @@
 - Thêm checkpoint JSON nguyên tử có SHA-256, xác thực model/config và resume cho pipeline dịch.
 - Thêm API tiến độ theo batch/cue và thống kê số cue Stage 2 thay đổi hoặc fallback trong `translator-engine`.
 - Triển khai `vtt-trans` với `--stage stage1|stage2|all`, progress bar trên stderr, output summary và hướng dẫn llama-server/Ollama.
+- Thêm `Vocabulary::parse` và `--vocab`, lọc thuật ngữ theo SRC từng batch ở cả hai stage, kiểm tra fingerprint từ điển khi resume và chuẩn hóa `《...》` thành `〈...〉`.
+- Mở rộng `vtt-trans` để quét `.vtt` cấp một trong thư mục, giữ checkpoint riêng theo file và xuất hàng loạt qua `--output-dir`.

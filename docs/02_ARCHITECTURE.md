@@ -17,6 +17,8 @@ vtt-cli -> translator-engine -> { vtt-core, llm-client }
 - **`TranslationState`**: phiên bản schema, SHA-256 đầu vào, fingerprint hai stage và trạng thái theo cue (`pending`, `drafted`, `refined`), gồm bản nháp/bản cuối.
 - **`CuePatch`**: `{ id, final_text }`. Chỉ payload cue tương ứng được phép thay đổi; edit trùng ID, ID ngoài batch hoặc vi phạm bảo toàn tag được ghi cảnh báo, cue đó dùng lại draft Stage 1 và engine tiếp tục.
 - **Tiến độ và thống kê**: `EngineProgress` báo stage, số batch/cue hoàn tất và tổng số; `TranslationStats` tổng hợp cue đã dịch, cue Stage 2 thực sự đổi nội dung và cue fallback do edit không an toàn/trùng.
+- **Vocabulary**: engine đọc glossary dạng `source = translation` hoặc `source: translation`, lọc thuật ngữ có trong SRC theo từng batch, đặt khóa dài hơn lên trước và gắn fingerprint glossary vào checkpoint để ngăn resume với từ điển khác.
+- Payload dịch chuẩn hóa ngoặc chú thích `《...》` thành `〈...〉` trước khi lưu checkpoint và xuất kết quả.
 
 ## Checkpoint / resume
 

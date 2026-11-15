@@ -6,7 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use translator_engine::{
     EngineProgress, Stage1Drafter, Stage2Refiner, StageConfig, TranslationResult, TranslationStage,
-    TranslatorEngine,
+    TranslatorEngine, Vocabulary,
 };
 use vtt_core::VttDocument;
 
@@ -25,8 +25,12 @@ struct Args {
     input: Option<PathBuf>,
     #[arg(long)]
     output: Option<PathBuf>,
+    #[arg(long)]
+    output_dir: Option<PathBuf>,
     #[arg(long, default_value = "work")]
     work_dir: PathBuf,
+    #[arg(long)]
+    vocab: Option<PathBuf>,
     #[arg(long, default_value = "http://127.0.0.1:8080/v1")]
     stage1_base_url: String,
     #[arg(long, default_value = "http://127.0.0.1:8080/v1")]
@@ -49,51 +53,74 @@ async fn main() -> Result<()> {
     let args = Args::parse();
     validate_args(&args)?;
 
-    let engine = create_engine(&args)?;
     let style = ProgressStyle::with_template(
         "{prefix:.bold} {wide_bar:.cyan/blue} {pos}/{len} cues | {msg} | {elapsed_precise}<{eta_precise} ({per_sec} cues/s)",
     )
     .context("invalid progress bar template")?
     .progress_chars("=>-");
-    let mut progress = progress_reporter(style);
+    let vocabulary = load_vocabulary(args.vocab.as_deref())?;
+    let input_files = match args.input.as_deref() {
+        Some(path) => collect_inputs(path)?,
+        None => vec![],
+    };
 
-    match args.stage {
-        StageSelection::Stage1 => {
-            let input = args.input.as_deref().expect("validated input path");
-            let source = fs::read_to_string(input)
-                .with_context(|| format!("failed to read input file {}", input.display()))?;
-            let cue_count = VttDocument::parse(&source)?.cues().count();
-            engine
-                .run_stage1_with_progress(&source, &mut progress)
-                .await
-                .context("Stage 1 failed")?;
-            print_summary(cue_count, cue_count, None, None);
-            eprintln!(
-                "Checkpoint: {}",
-                args.work_dir.join("checkpoint.json").display()
-            );
-        }
-        StageSelection::Stage2 => {
-            let output = args.output.as_deref().expect("validated output path");
-            let source_copy = args.work_dir.join(SOURCE_FILE);
-            let result = engine
-                .run_stage2_with_progress(&mut progress)
-                .await
-                .context("Stage 2 failed")?;
-            write_output(output, &source_copy, &result.vtt)?;
-            print_result(&result, output);
-        }
-        StageSelection::All => {
-            let input = args.input.as_deref().expect("validated input path");
-            let output = args.output.as_deref().expect("validated output path");
-            let source = fs::read_to_string(input)
-                .with_context(|| format!("failed to read input file {}", input.display()))?;
-            let result = engine
-                .run_with_progress(&source, &mut progress)
-                .await
-                .context("translation failed")?;
-            write_output(output, input, &result.vtt)?;
-            print_result(&result, output);
+    if args.stage == StageSelection::Stage2 && input_files.is_empty() {
+        let engine = create_engine(&args, &args.work_dir, vocabulary)?;
+        let mut progress = progress_reporter(style);
+        let result = engine
+            .run_stage2_with_progress(&mut progress)
+            .await
+            .context("Stage 2 failed")?;
+        let output = args.output.as_deref().expect("validated output path");
+        let source = args.work_dir.join(SOURCE_FILE);
+        write_output(output, &source, &result.vtt)?;
+        print_result(&result, output);
+        return Ok(());
+    }
+
+    for input in input_files {
+        let folder_run = args.input.as_deref().is_some_and(Path::is_dir);
+        let work_dir = if folder_run {
+            directory_work_dir(&args.work_dir, args.input.as_deref().unwrap(), &input)?
+        } else {
+            args.work_dir.clone()
+        };
+        let engine = create_engine(&args, &work_dir, vocabulary.clone())?;
+        let mut progress = progress_reporter(style.clone());
+
+        match args.stage {
+            StageSelection::Stage1 => {
+                let source = fs::read_to_string(&input)
+                    .with_context(|| format!("failed to read input file {}", input.display()))?;
+                let cue_count = VttDocument::parse(&source)?.cues().count();
+                engine
+                    .run_stage1_with_progress(&source, &mut progress)
+                    .await
+                    .with_context(|| format!("Stage 1 failed for {}", input.display()))?;
+                print_summary(cue_count, cue_count, None, None);
+                eprintln!("Checkpoint: {}", work_dir.join("checkpoint.json").display());
+            }
+            StageSelection::Stage2 => {
+                let result = engine
+                    .run_stage2_with_progress(&mut progress)
+                    .await
+                    .with_context(|| format!("Stage 2 failed in {}", work_dir.display()))?;
+                let output = output_path(&args, &input)?;
+                let source = work_dir.join(SOURCE_FILE);
+                write_output(&output, &source, &result.vtt)?;
+                print_result(&result, &output);
+            }
+            StageSelection::All => {
+                let source = fs::read_to_string(&input)
+                    .with_context(|| format!("failed to read input file {}", input.display()))?;
+                let result = engine
+                    .run_with_progress(&source, &mut progress)
+                    .await
+                    .with_context(|| format!("translation failed for {}", input.display()))?;
+                let output = output_path(&args, &input)?;
+                write_output(&output, &input, &result.vtt)?;
+                print_result(&result, &output);
+            }
         }
     }
 
@@ -101,28 +128,42 @@ async fn main() -> Result<()> {
 }
 
 fn validate_args(args: &Args) -> Result<()> {
+    let input_is_dir = args.input.as_deref().is_some_and(Path::is_dir);
+    if args.output.is_some() && args.output_dir.is_some() {
+        bail!("use either --output or --output-dir, not both");
+    }
+
     match args.stage {
         StageSelection::Stage1 if args.input.is_none() => {
             bail!("--input is required when --stage is stage1")
         }
-        StageSelection::Stage2 if args.output.is_none() => {
-            bail!("--output is required when --stage is stage2")
+        StageSelection::Stage2 if args.input.is_some() && !input_is_dir => {
+            bail!("--input is only accepted as a directory for batch Stage 2")
         }
-        StageSelection::All if args.input.is_none() || args.output.is_none() => {
-            bail!("--input and --output are required when --stage is all")
+        StageSelection::Stage2 if input_is_dir && args.output_dir.is_none() => {
+            bail!("--output-dir is required when --input is a directory")
         }
-        StageSelection::Stage1 if args.output.is_some() => {
-            bail!("--output is only used with --stage stage2 or --stage all")
+        StageSelection::Stage2 if !input_is_dir && args.output.is_none() => {
+            bail!("--output is required for a single checkpoint")
         }
-        StageSelection::Stage2 if args.input.is_some() => {
-            bail!("--input is not needed for --stage stage2; use the checkpoint in --work-dir")
+        StageSelection::All if args.input.is_none() => {
+            bail!("--input is required when --stage is all")
+        }
+        StageSelection::All if input_is_dir && args.output_dir.is_none() => {
+            bail!("--output-dir is required when --input is a directory")
+        }
+        StageSelection::All if !input_is_dir && args.output.is_none() => {
+            bail!("--output is required when --input is a file")
+        }
+        StageSelection::Stage1 if args.output.is_some() || args.output_dir.is_some() => {
+            bail!("output options are not used with --stage stage1")
         }
         _ => {}
     }
     Ok(())
 }
 
-fn create_engine(args: &Args) -> Result<TranslatorEngine> {
+fn create_engine(args: &Args, work_dir: &Path, vocabulary: Vocabulary) -> Result<TranslatorEngine> {
     let stage1 = Stage1Drafter::new(
         create_client(&args.stage1_base_url)?,
         StageConfig::new(&args.stage1_model),
@@ -131,7 +172,70 @@ fn create_engine(args: &Args) -> Result<TranslatorEngine> {
         create_client(&args.stage2_base_url)?,
         StageConfig::new(&args.stage2_model),
     );
-    TranslatorEngine::new(&args.work_dir, stage1, stage2).context("invalid engine configuration")
+    TranslatorEngine::new(work_dir, stage1, stage2)
+        .map(|engine| engine.with_vocabulary(vocabulary))
+        .context("invalid engine configuration")
+}
+
+fn load_vocabulary(path: Option<&Path>) -> Result<Vocabulary> {
+    let Some(path) = path else {
+        return Ok(Vocabulary::default());
+    };
+    let contents = fs::read_to_string(path)
+        .with_context(|| format!("failed to read vocabulary {}", path.display()))?;
+    Vocabulary::parse(&contents).with_context(|| format!("invalid vocabulary {}", path.display()))
+}
+
+fn collect_inputs(input: &Path) -> Result<Vec<PathBuf>> {
+    if input.is_file() {
+        return Ok(vec![input.to_path_buf()]);
+    }
+    if !input.is_dir() {
+        bail!("input path does not exist: {}", input.display());
+    }
+    let mut files = fs::read_dir(input)
+        .with_context(|| format!("failed to list input directory {}", input.display()))?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<std::io::Result<Vec<_>>>()?
+        .into_iter()
+        .filter(|path| {
+            path.is_file()
+                && path
+                    .extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("vtt"))
+        })
+        .collect::<Vec<_>>();
+    files.sort();
+    if files.is_empty() {
+        bail!(
+            "input directory contains no .vtt files: {}",
+            input.display()
+        );
+    }
+    Ok(files)
+}
+
+fn directory_work_dir(base: &Path, input_dir: &Path, file: &Path) -> Result<PathBuf> {
+    let folder = input_dir
+        .file_name()
+        .context("input directory must have a name")?;
+    let stem = file.file_stem().context("input file must have a name")?;
+    Ok(base.join(folder).join(stem))
+}
+
+fn output_path(args: &Args, input: &Path) -> Result<PathBuf> {
+    if let Some(output) = &args.output {
+        return Ok(output.clone());
+    }
+    let name = input
+        .file_stem()
+        .context("input file path must have a name")?
+        .to_string_lossy();
+    Ok(args
+        .output_dir
+        .as_ref()
+        .unwrap()
+        .join(format!("{name}.vi.vtt")))
 }
 
 fn create_client(base_url: &str) -> Result<LlmClient> {
@@ -289,5 +393,58 @@ mod tests {
 
         assert!(write_output(&source, &source, "translated").is_err());
         assert_eq!(fs::read_to_string(source).unwrap(), "WEBVTT\n");
+    }
+
+    #[test]
+    fn directory_input_selects_only_sorted_top_level_vtt_files() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(directory.path().join("b.VTT"), "WEBVTT\n").unwrap();
+        fs::write(directory.path().join("a.vtt"), "WEBVTT\n").unwrap();
+        fs::write(directory.path().join("movie.mp4"), []).unwrap();
+        fs::create_dir(directory.path().join("nested")).unwrap();
+        fs::write(directory.path().join("nested\\ignored.vtt"), "WEBVTT\n").unwrap();
+
+        let files = collect_inputs(directory.path()).unwrap();
+        assert_eq!(
+            files,
+            vec![
+                directory.path().join("a.vtt"),
+                directory.path().join("b.VTT")
+            ]
+        );
+        assert_eq!(
+            directory_work_dir(Path::new("work"), Path::new("in"), &files[0]).unwrap(),
+            PathBuf::from("work").join("in").join("a")
+        );
+    }
+
+    #[test]
+    fn directory_modes_require_an_output_directory() {
+        let directory = tempfile::tempdir().unwrap();
+        let input = directory.path().join("subs");
+        fs::create_dir(&input).unwrap();
+        fs::write(input.join("one.vtt"), "WEBVTT\n").unwrap();
+
+        let args = Args::try_parse_from([
+            "vtt-trans",
+            "--stage",
+            "all",
+            "--input",
+            input.to_str().unwrap(),
+            "--output-dir",
+            "out",
+        ])
+        .unwrap();
+        assert!(validate_args(&args).is_ok());
+
+        let missing_output = Args::try_parse_from([
+            "vtt-trans",
+            "--stage",
+            "all",
+            "--input",
+            input.to_str().unwrap(),
+        ])
+        .unwrap();
+        assert!(validate_args(&missing_output).is_err());
     }
 }
