@@ -1,68 +1,67 @@
 # `vtt-trans`
 
-`vtt-trans` translates WebVTT using OpenAI-compatible local chat-completion servers. The default stage is `all`; `stage1` and `stage2` can run separately so the first model can be stopped before the second is loaded.
+`vtt-trans` translates WebVTT with a two-stage local LLM pipeline. It builds one `master_glossary.json` from caption files using the Stage 2 model, then shares that glossary across Stage 1 and Stage 2 and across episode checkpoints. `--vocab` is optional; when supplied, its entries are merged into the master glossary and override matching generated terms.
 
-## Run Stage 1, switch models, then run Stage 2
+## 1. Build the master glossary
 
-Start the Stage 1 model in **Terminal 1**. Adjust `--threads` to the CPU and `--ctx-size` to the available memory:
-
-```powershell
-llama-server -m models/Hy-MT2-30B-A3B-Q4_K_M.gguf --alias Hy-MT2-30B-A3B --threads 16 --ctx-size 8192 --cache-type-k q8_0 -ngl 0 --host 127.0.0.1 --port 8080
-```
-
-Run the CLI in **Terminal 2**:
+The default Stage 2 model alias is `ERNIE-4.5-21B-A3B-Q4_K_M`. Make the matching GGUF available at `models/ERNIE-4.5-21B-A3B-Q4_K_M.gguf`, then start its server:
 
 ```powershell
-cargo run --release -p vtt-cli -- --stage stage1 --input input/movie.vtt --work-dir work --vocab vocabulary.txt --stage1-base-url http://127.0.0.1:8080/v1 --stage1-model Hy-MT2-30B-A3B
+llama-server -m models/ERNIE-4.5-21B-A3B-Q4_K_M.gguf --alias ERNIE-4.5-21B-A3B-Q4_K_M --threads 16 --ctx-size 8192 --cache-type-k q8_0 -ngl 0 --host 127.0.0.1 --port 8080
 ```
 
-After Stage 1 finishes, stop `llama-server` in Terminal 1 and start it again with the Stage 2 model (the same port can be reused):
+Build the glossary from one or more caption files. Directories are scanned recursively for `.vtt` files; repeated warning captions are ignored.
 
 ```powershell
-llama-server -m models/Qwen3-30B-A3B-Q4_K_M.gguf --alias Qwen3-30B-A3B --threads 16 --ctx-size 8192 --cache-type-k q8_0 --reasoning-budget 0 -ngl 0 --host 127.0.0.1 --port 8080
+cargo run --release -p vtt-cli -- --stage build-glossary --caption-file in\.tmp_S02E001\captions.zh.vtt --caption-file in\.tmp_S02E002\captions.zh.vtt --work-dir work\series --genre "huyền huyễn, tu tiên" --stage2-base-url http://127.0.0.1:8080/v1
 ```
 
-Then resume from the checkpoint in Terminal 2:
+The result is `work\series\master_glossary.json`. It contains genre-specific address/style rules and caption-derived character names, aliases, titles, places, and terms. You can also pass a caption directory:
 
 ```powershell
-cargo run --release -p vtt-cli -- --stage stage2 --work-dir work --output output/movie.vi.vtt --vocab vocabulary.txt --stage2-base-url http://127.0.0.1:8080/v1 --stage2-model Qwen3-30B-A3B --stage1-model Hy-MT2-30B-A3B
+cargo run --release -p vtt-cli -- --stage build-glossary --caption-file in\.tmp_S02E001 --work-dir work\series --genre "huyền huyễn, tu tiên" --stage2-base-url http://127.0.0.1:8080/v1
 ```
 
-When using a custom Stage 1 model name, pass the same `--stage1-model` value to both commands so the checkpoint fingerprint matches. The Stage 2 command reads `source.vtt` and `checkpoint.json` from `--work-dir`; it does not need `--input`.
-
-Stage 2 disables Qwen thinking in each request with `chat_template_kwargs.enable_thinking=false` and a `/no_think` system-prompt suffix. Keep `--reasoning-budget 0` on the Qwen llama-server command as an additional server-side safeguard.
-
-To run both stages without switching servers:
+Genre examples:
 
 ```powershell
-cargo run --release -p vtt-cli -- --input input/movie.vtt --output output/movie.vi.vtt --work-dir work --vocab vocabulary.txt --stage1-base-url http://127.0.0.1:8080/v1 --stage2-base-url http://127.0.0.1:8080/v1
+cargo run --release -p vtt-cli -- --stage build-glossary --caption-file captions.zh.vtt --work-dir work\xianxia --genre "huyền huyễn, tu tiên" --stage2-base-url http://127.0.0.1:8080/v1
+cargo run --release -p vtt-cli -- --stage build-glossary --caption-file captions.zh.vtt --work-dir work\modern-drama --genre "hiện đại, drama" --stage2-base-url http://127.0.0.1:8080/v1
+cargo run --release -p vtt-cli -- --stage build-glossary --caption-file captions.zh.vtt --work-dir work\90s-drama --genre "thập niên 90, drama" --stage2-base-url http://127.0.0.1:8080/v1
 ```
 
-For a directory, the CLI processes top-level source `.vtt` files in name order (other files and existing `.vi.vtt` translations are ignored). Each checkpoint is kept under `work/<input-directory>/<file-stem>/`; `--output-dir` receives `<file-stem>.vi.vtt`:
+If translation starts with `--caption-file` and the master glossary does not exist (or its captions/genre changed), the CLI builds it automatically through the Stage 2 endpoint. To keep model use sequential and reduce memory pressure, build the glossary first, stop ERNIE, and then start the Stage 1 server.
+
+## 2. Run Stage 1 and Stage 2
+
+Start Hy-MT2 for Stage 1:
 
 ```powershell
-cargo run --release -p vtt-cli -- --stage stage1 --input in --work-dir work --vocab vocabulary.txt --caption-file captions.zh.vtt --stage1-batch-size 20 --stage2-batch-size 35 --stage1-base-url http://127.0.0.1:8080/v1
-cargo run --release -p vtt-cli -- --stage stage2 --input in --work-dir work --output-dir output/in --vocab vocabulary.txt --stage2-base-url http://127.0.0.1:8080/v1
+llama-server -m models/Hy-MT2-30B-A3B-Q4_K_M.gguf --alias Hy-MT2-30B-A3B --threads 16 --ctx-size 4096 --cache-type-k q8_0 -ngl 0 --host 127.0.0.1 --port 8081
 ```
 
-Use the same vocabulary file and Stage 1 model name in both stages; its fingerprint is checked when resuming.
-Repeat `--caption-file` for additional caption files, or pass directories to scan recursively. Generated name/title entries are cached once at `<work-dir>/auto_glossary.json` and reused for all per-file checkpoints; manual `vocabulary.txt` entries take precedence. Stage 1 and Stage 2 default to batches of 20 and 35 cues respectively; use `--stage1-batch-size` and `--stage2-batch-size` to override them.
-
-## Ollama
-
-Run `ollama serve` in **Terminal 1**. Both models must already be available (import the GGUF models first if needed). The OpenAI-compatible endpoint is typically `http://127.0.0.1:11434/v1`:
+Run Stage 1 with the same `--work-dir` and `--genre` used to create the glossary:
 
 ```powershell
-ollama serve
+cargo run --release -p vtt-cli -- --stage stage1 --input in\S02E001.merged.zh.vtt --work-dir work\series --genre "huyền huyễn, tu tiên" --stage1-base-url http://127.0.0.1:8081/v1 --stage1-model Hy-MT2-30B-A3B
 ```
 
-In **Terminal 2**, run Stage 1, unload its model after the batch completes, then resume with Stage 2:
+Stop Hy-MT2, start ERNIE on port 8082, then resume Stage 2:
 
 ```powershell
-ollama list
-cargo run --release -p vtt-cli -- --stage stage1 --input input/movie.vtt --work-dir work --vocab vocabulary.txt --stage1-base-url http://127.0.0.1:11434/v1 --stage1-model Hy-MT2-30B-A3B
-ollama stop Hy-MT2-30B-A3B
-cargo run --release -p vtt-cli -- --stage stage2 --work-dir work --output output/movie.vi.vtt --vocab vocabulary.txt --stage2-base-url http://127.0.0.1:11434/v1 --stage2-model Qwen3-30B-A3B --stage1-model Hy-MT2-30B-A3B
+llama-server -m models/ERNIE-4.5-21B-A3B-Q4_K_M.gguf --alias ERNIE-4.5-21B-A3B-Q4_K_M --threads 16 --ctx-size 8192 --cache-type-k q8_0 -ngl 0 --host 127.0.0.1 --port 8082
+cargo run --release -p vtt-cli -- --stage stage2 --work-dir work\series --output output\S02E001.vi.vtt --genre "huyền huyễn, tu tiên" --stage1-model Hy-MT2-30B-A3B --stage2-base-url http://127.0.0.1:8082/v1
 ```
 
-The CLI displays cue progress and ETA on stderr. The final summary reports translated cues, cues changed by Stage 2, and cues that fell back to the Stage 1 draft after an unsafe or duplicate edit; omitted Stage 2 edits are valid unchanged drafts, not fallback errors. Server compatibility depends on support for the OpenAI chat-completions endpoint, the request sampler fields, and Stage 2 JSON Schema response format.
+The `--genre` must match the cached glossary. Stage 1 and Stage 2 default to batches of 20 and 35 cues; override with `--stage1-batch-size` or `--stage2-batch-size`. Stage 2 prints a warning for any cue whose final text does not contain a required caption-derived character, title, or place translation.
+
+To let the CLI build the glossary automatically, add one or more `--caption-file PATH` arguments to a Stage 1 or `all` command and keep the Stage 2 endpoint available. `--vocab vocabulary.txt` remains an optional manual override, not a requirement.
+
+## Directory input
+
+Directory input processes top-level source `.vtt` files in name order, skips existing `.vi.vtt` files, creates a checkpoint per episode under `<work-dir>/<input-directory>/<file-stem>/`, and writes translations under `--output-dir`. Caption directories, unlike input directories, are scanned recursively.
+
+```powershell
+cargo run --release -p vtt-cli -- --stage stage1 --input in --work-dir work\series --genre "huyền huyễn, tu tiên" --stage1-base-url http://127.0.0.1:8081/v1
+cargo run --release -p vtt-cli -- --stage stage2 --input in --work-dir work\series --output-dir output\in --genre "huyền huyễn, tu tiên" --stage2-base-url http://127.0.0.1:8082/v1
+```

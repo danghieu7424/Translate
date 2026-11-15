@@ -2,14 +2,13 @@ use anyhow::{Context, Result, bail};
 use clap::{ArgAction, Parser, ValueEnum};
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use llm_client::{ClientConfig, LlmClient};
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use translator_engine::{
-    EngineProgress, GlossaryEntry, Stage1Drafter, Stage2Refiner, StageConfig, TranslationResult,
-    TranslationStage, TranslatorEngine, Vocabulary,
+    DEFAULT_GENRE, EngineProgress, MasterGlossary, Stage1Drafter, Stage2Refiner, StageConfig,
+    TranslationResult, TranslationStage, TranslatorEngine, Vocabulary,
 };
 use vtt_core::VttDocument;
 
@@ -34,6 +33,8 @@ struct Args {
     work_dir: PathBuf,
     #[arg(long)]
     vocab: Option<PathBuf>,
+    #[arg(long, default_value = DEFAULT_GENRE)]
+    genre: String,
     #[arg(long = "caption-file", action = ArgAction::Append, value_name = "PATH")]
     caption_files: Vec<PathBuf>,
     #[arg(long, default_value_t = 20)]
@@ -46,7 +47,7 @@ struct Args {
     stage2_base_url: String,
     #[arg(long, default_value = "Hy-MT2-30B-A3B")]
     stage1_model: String,
-    #[arg(long, default_value = "Qwen3-30B-A3B")]
+    #[arg(long, default_value = "ERNIE-4.5-21B-A3B-Q4_K_M")]
     stage2_model: String,
 }
 
@@ -55,6 +56,7 @@ enum StageSelection {
     Stage1,
     Stage2,
     All,
+    BuildGlossary,
 }
 
 #[tokio::main]
@@ -69,6 +71,23 @@ async fn main() -> Result<()> {
     .progress_chars("=>-");
     let vocabulary = load_vocabulary(args.vocab.as_deref())?;
     let caption_files = collect_caption_files(&args.caption_files)?;
+    if args.stage == StageSelection::BuildGlossary {
+        let captions = load_caption_cues(&caption_files)?;
+        let engine = create_engine(&args, &args.work_dir)?;
+        let mut glossary = engine
+            .build_master_glossary(&captions, &args.genre)
+            .await
+            .context("failed to build master glossary")?;
+        glossary.merge_vocabulary(vocabulary);
+        save_master_glossary(&args.work_dir, &glossary)?;
+        println!(
+            "Master glossary: {} ({} entries)",
+            args.work_dir.join("master_glossary.json").display(),
+            glossary.entries.len()
+        );
+        return Ok(());
+    }
+
     let input_files = match args.input.as_deref() {
         Some(path) => collect_inputs(path)?,
         None => vec![],
@@ -76,15 +95,17 @@ async fn main() -> Result<()> {
 
     if args.stage == StageSelection::Stage2 && input_files.is_empty() {
         let engine = create_engine(&args, &args.work_dir)?;
-        let vocabulary = resolve_vocabulary(
-            args.stage,
+        let glossary = resolve_master_glossary(
             &args.work_dir,
             &caption_files,
             &vocabulary,
+            &args.genre,
             &engine,
         )
         .await?;
-        let engine = engine.with_vocabulary(vocabulary);
+        let engine = engine
+            .with_master_glossary(glossary)
+            .context("invalid master glossary")?;
         let mut progress = progress_reporter(style);
         let result = engine
             .run_stage2_with_progress(&mut progress)
@@ -105,15 +126,17 @@ async fn main() -> Result<()> {
             args.work_dir.clone()
         };
         let engine = create_engine(&args, &work_dir)?;
-        let vocabulary = resolve_vocabulary(
-            args.stage,
+        let glossary = resolve_master_glossary(
             &args.work_dir,
             &caption_files,
             &vocabulary,
+            &args.genre,
             &engine,
         )
         .await?;
-        let engine = engine.with_vocabulary(vocabulary);
+        let engine = engine
+            .with_master_glossary(glossary)
+            .context("invalid master glossary")?;
         let mut progress = progress_reporter(style.clone());
 
         match args.stage {
@@ -149,6 +172,9 @@ async fn main() -> Result<()> {
                 write_output(&output, &input, &result.vtt)?;
                 print_result(&result, &output);
             }
+            StageSelection::BuildGlossary => {
+                bail!("build-glossary must not enter the subtitle translation loop")
+            }
         }
     }
 
@@ -168,6 +194,15 @@ fn validate_args(args: &Args) -> Result<()> {
         StageSelection::Stage1 if args.input.is_none() => {
             bail!("--input is required when --stage is stage1")
         }
+        StageSelection::BuildGlossary if args.caption_files.is_empty() => {
+            bail!("--caption-file is required when --stage is build-glossary")
+        }
+        StageSelection::BuildGlossary
+            if args.input.is_some() || args.output.is_some() || args.output_dir.is_some() =>
+        {
+            bail!("build-glossary only accepts --caption-file and --work-dir")
+        }
+        _ if args.genre.trim().is_empty() => bail!("--genre must not be empty"),
         StageSelection::Stage2 if args.input.is_some() && !input_is_dir => {
             bail!("--input is only accepted as a directory for batch Stage 2")
         }
@@ -302,7 +337,7 @@ fn is_vtt_file(path: &Path) -> bool {
         .is_some_and(|extension| extension.eq_ignore_ascii_case("vtt"))
 }
 
-fn load_caption_cues(files: &[PathBuf], vocabulary: &Vocabulary) -> Result<Vec<String>> {
+fn load_caption_cues(files: &[PathBuf]) -> Result<Vec<String>> {
     let mut captions = Vec::new();
     let mut seen = HashSet::new();
     for path in files {
@@ -315,13 +350,8 @@ fn load_caption_cues(files: &[PathBuf], vocabulary: &Vocabulary) -> Result<Vec<S
             if is_repeated_warning(source) {
                 continue;
             }
-
-            let candidate = vocabulary.remove_known_terms(source);
-            let candidate = candidate.trim_matches(|character: char| {
-                character.is_whitespace() || "《》〈〉-—:：，,。.!！?？、".contains(character)
-            });
-            if candidate.chars().any(char::is_alphanumeric) && seen.insert(candidate.to_owned()) {
-                captions.push(candidate.to_owned());
+            if !source.is_empty() && seen.insert(source.to_owned()) {
+                captions.push(source.to_owned());
             }
         }
     }
@@ -334,95 +364,77 @@ fn is_repeated_warning(source: &str) -> bool {
         || source.contains("危险动作不应模仿")
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct AutoGlossaryCache {
-    version: u32,
-    caption_sha256: String,
-    entries: Vec<GlossaryEntry>,
-}
-
-async fn resolve_vocabulary(
-    stage: StageSelection,
+async fn resolve_master_glossary(
     work_dir: &Path,
     caption_files: &[PathBuf],
     manual_vocabulary: &Vocabulary,
+    genre: &str,
     engine: &TranslatorEngine,
-) -> Result<Vocabulary> {
-    let cache_path = work_dir.join("auto_glossary.json");
+) -> Result<MasterGlossary> {
+    let cache_path = work_dir.join("master_glossary.json");
     let captions = if caption_files.is_empty() {
         None
     } else {
-        Some(load_caption_cues(caption_files, manual_vocabulary)?)
+        Some(load_caption_cues(caption_files)?)
     };
-    let cached = load_auto_glossary(&cache_path)?;
-    let automatic = match (stage, captions.as_ref(), cached) {
-        (StageSelection::Stage2, Some(captions), Some(cache)) => {
-            let fingerprint = caption_fingerprint(captions)?;
-            if cache.caption_sha256 != fingerprint {
-                bail!(
-                    "caption files do not match the auto glossary cache in {}; rerun Stage 1",
-                    work_dir.display()
-                );
+    let cached = load_master_glossary(&cache_path)?;
+    let mut glossary = if let Some(captions) = captions.as_ref() {
+        let fingerprint = caption_fingerprint(captions)?;
+        match cached {
+            Some(cached)
+                if cached.genre == genre.trim() && cached.caption_sha256 == fingerprint =>
+            {
+                cached
             }
-            Vocabulary::from_entries(cache.entries).context("invalid auto glossary entries")?
+            _ => {
+                let glossary = engine
+                    .build_master_glossary(captions, genre)
+                    .await
+                    .context("failed to build master glossary from captions")?;
+                save_master_glossary(work_dir, &glossary)?;
+                glossary
+            }
         }
-        (StageSelection::Stage2, Some(_), None) => {
+    } else if let Some(cached) = cached {
+        if cached.genre != genre.trim() {
             bail!(
-                "auto glossary cache is missing in {}; run Stage 1 with --caption-file first",
-                work_dir.display()
+                "master glossary genre is `{}`, but `--genre` is `{}`; rebuild it with --stage build-glossary and --caption-file",
+                cached.genre,
+                genre
             );
         }
-        (StageSelection::Stage2, None, Some(cache))
-        | (StageSelection::Stage1 | StageSelection::All, None, Some(cache)) => {
-            Vocabulary::from_entries(cache.entries).context("invalid auto glossary entries")?
-        }
-        (StageSelection::Stage1 | StageSelection::All, Some(captions), cache) => {
-            let fingerprint = caption_fingerprint(captions)?;
-            if let Some(cache) = cache.filter(|cache| cache.caption_sha256 == fingerprint) {
-                Vocabulary::from_entries(cache.entries).context("invalid auto glossary entries")?
-            } else {
-                let vocabulary = engine.translate_caption_terms(captions).await?;
-                let cache = AutoGlossaryCache {
-                    version: 1,
-                    caption_sha256: fingerprint,
-                    entries: vocabulary.entries(),
-                };
-                fs::create_dir_all(work_dir).with_context(|| {
-                    format!("failed to create work directory {}", work_dir.display())
-                })?;
-                fs::write(&cache_path, serde_json::to_vec_pretty(&cache)?).with_context(|| {
-                    format!(
-                        "failed to write auto glossary cache {}",
-                        cache_path.display()
-                    )
-                })?;
-                vocabulary
-            }
-        }
-        (_, None, None) => Vocabulary::default(),
+        cached
+    } else {
+        MasterGlossary::empty(genre, caption_fingerprint(&[])?)
     };
-    Ok(manual_vocabulary.clone().merge(automatic))
+
+    glossary.merge_vocabulary(manual_vocabulary.clone());
+    glossary.validate().context("invalid master glossary")?;
+    save_master_glossary(work_dir, &glossary)?;
+    Ok(glossary)
 }
 
-fn load_auto_glossary(path: &Path) -> Result<Option<AutoGlossaryCache>> {
+fn load_master_glossary(path: &Path) -> Result<Option<MasterGlossary>> {
     if !path.exists() {
         return Ok(None);
     }
     let contents = fs::read(path)
-        .with_context(|| format!("failed to read auto glossary cache {}", path.display()))?;
-    let cache: AutoGlossaryCache = serde_json::from_slice(&contents)
-        .with_context(|| format!("invalid auto glossary cache {}", path.display()))?;
-    if cache.version != 1 {
-        bail!(
-            "unsupported auto glossary cache version {} in {}",
-            cache.version,
-            path.display()
-        );
-    }
-    Vocabulary::from_entries(cache.entries.clone())
-        .with_context(|| format!("invalid auto glossary entries in {}", path.display()))?;
-    Ok(Some(cache))
+        .with_context(|| format!("failed to read master glossary {}", path.display()))?;
+    let glossary: MasterGlossary = serde_json::from_slice(&contents)
+        .with_context(|| format!("invalid master glossary {}", path.display()))?;
+    glossary
+        .validate()
+        .with_context(|| format!("invalid master glossary {}", path.display()))?;
+    Ok(Some(glossary))
+}
+
+fn save_master_glossary(work_dir: &Path, glossary: &MasterGlossary) -> Result<()> {
+    glossary.validate().context("invalid master glossary")?;
+    fs::create_dir_all(work_dir)
+        .with_context(|| format!("failed to create work directory {}", work_dir.display()))?;
+    let path = work_dir.join("master_glossary.json");
+    fs::write(&path, serde_json::to_vec_pretty(glossary)?)
+        .with_context(|| format!("failed to write master glossary {}", path.display()))
 }
 
 fn caption_fingerprint(captions: &[String]) -> Result<String> {
@@ -554,6 +566,63 @@ fn print_summary(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::thread::{self, JoinHandle};
+    use translator_engine::{GlossaryCategory, MasterGlossaryEntry};
+
+    fn glossary_server(content: &str) -> (String, JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let response_body = serde_json::json!({
+            "choices": [{
+                "message": {"role": "assistant", "content": content},
+                "finish_reason": "stop"
+            }]
+        })
+        .to_string();
+        let thread = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+                .unwrap();
+            read_http_body(&mut stream);
+            let response = format!(
+                "HTTP/1.1 200 Test Response\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                response_body.len(),
+                response_body
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+        });
+        (format!("http://{address}"), thread)
+    }
+
+    fn read_http_body(stream: &mut TcpStream) {
+        let mut request = Vec::new();
+        let mut buffer = [0; 4096];
+        loop {
+            let count = stream.read(&mut buffer).unwrap();
+            assert_ne!(count, 0, "client closed before sending the full request");
+            request.extend_from_slice(&buffer[..count]);
+            let Some(header_end) = request.windows(4).position(|window| window == b"\r\n\r\n")
+            else {
+                continue;
+            };
+            let body_start = header_end + 4;
+            let headers = String::from_utf8_lossy(&request[..body_start]);
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().unwrap())
+                })
+                .unwrap();
+            if request.len() >= body_start + content_length {
+                return;
+            }
+        }
+    }
 
     #[test]
     fn stage_selection_defaults_to_all_and_accepts_explicit_stages() {
@@ -563,6 +632,9 @@ mod tests {
         assert_eq!(defaults.stage, StageSelection::All);
         assert_eq!(defaults.stage1_batch_size, 20);
         assert_eq!(defaults.stage2_batch_size, 35);
+        assert_eq!(defaults.genre, DEFAULT_GENRE);
+        assert!(defaults.vocab.is_none());
+        assert_eq!(defaults.stage2_model, "ERNIE-4.5-21B-A3B-Q4_K_M");
         assert!(validate_args(&defaults).is_ok());
 
         for (stage, expected) in [
@@ -582,6 +654,20 @@ mod tests {
             .unwrap();
             assert_eq!(args.stage, expected);
         }
+
+        let glossary = Args::try_parse_from([
+            "vtt-trans",
+            "--stage",
+            "build-glossary",
+            "--caption-file",
+            "captions.vtt",
+            "--genre",
+            "hiện đại, drama",
+        ])
+        .unwrap();
+        assert_eq!(glossary.stage, StageSelection::BuildGlossary);
+        assert_eq!(glossary.genre, "hiện đại, drama");
+        assert!(validate_args(&glossary).is_ok());
     }
 
     #[test]
@@ -682,7 +768,7 @@ mod tests {
     }
 
     #[test]
-    fn caption_directories_are_recursive_and_known_terms_and_warnings_are_filtered() {
+    fn caption_directories_are_recursive_and_only_warnings_are_filtered() {
         let directory = tempfile::tempdir().unwrap();
         let nested = directory.path().join("nested");
         fs::create_dir(&nested).unwrap();
@@ -705,36 +791,48 @@ mod tests {
         fs::write(nested.join("ignored.mp4"), []).unwrap();
 
         let files = collect_caption_files(&[directory.path().to_path_buf()]).unwrap();
-        let vocabulary = Vocabulary::parse("陆清安 = Lục Thanh An").unwrap();
-        let captions = load_caption_cues(&files, &vocabulary).unwrap();
+        let captions = load_caption_cues(&files).unwrap();
 
         assert_eq!(files.len(), 2);
-        assert_eq!(captions, vec!["雪天妃", "幽冥之主"]);
+        assert_eq!(
+            captions,
+            vec!["《陆清安-雪天妃》", "《雪天妃》", "陆清安", "幽冥之主"]
+        );
     }
 
     #[tokio::test]
-    async fn cached_auto_glossary_is_merged_below_manual_vocabulary() {
+    async fn loads_master_glossary_without_a_manual_vocabulary_file() {
         let directory = tempfile::tempdir().unwrap();
-        let cache = AutoGlossaryCache {
+        let glossary = MasterGlossary {
             version: 1,
-            caption_sha256: "caption-hash".to_owned(),
+            genre: DEFAULT_GENRE.to_owned(),
+            caption_sha256: caption_fingerprint(&[]).unwrap(),
+            address_rules: "Use ta/ngươi.".to_owned(),
             entries: vec![
-                GlossaryEntry {
+                MasterGlossaryEntry {
                     src: "陆清安".to_owned(),
-                    target: "wrong auto name".to_owned(),
+                    target: "Lục Thanh An".to_owned(),
+                    category: GlossaryCategory::CharacterName,
                 },
-                GlossaryEntry {
+                MasterGlossaryEntry {
                     src: "雪天妃".to_owned(),
                     target: "Tuyết Thiên Phi".to_owned(),
+                    category: GlossaryCategory::Title,
                 },
             ],
         };
-        fs::write(
-            directory.path().join("auto_glossary.json"),
-            serde_json::to_vec(&cache).unwrap(),
-        )
+        save_master_glossary(directory.path(), &glossary).unwrap();
+        let args = Args::try_parse_from([
+            "vtt-trans",
+            "--stage",
+            "stage2",
+            "--output",
+            "out.vtt",
+            "--work-dir",
+            directory.path().to_str().unwrap(),
+        ])
         .unwrap();
-        let manual = Vocabulary::parse("陆清安 = Lục Thanh An").unwrap();
+        assert!(args.vocab.is_none());
         let stage1 = Stage1Drafter::new(
             create_client("http://127.0.0.1:1").unwrap(),
             StageConfig::new("draft-model"),
@@ -745,29 +843,80 @@ mod tests {
         );
         let engine = TranslatorEngine::new(directory.path(), stage1, stage2).unwrap();
 
-        let combined = resolve_vocabulary(
-            StageSelection::Stage2,
+        let loaded = resolve_master_glossary(
             directory.path(),
             &[],
-            &manual,
+            &Vocabulary::default(),
+            &args.genre,
             &engine,
         )
         .await
         .unwrap();
 
-        assert_eq!(
-            combined.entries(),
-            vec![
-                GlossaryEntry {
-                    src: "陆清安".to_owned(),
-                    target: "Lục Thanh An".to_owned(),
-                },
-                GlossaryEntry {
-                    src: "雪天妃".to_owned(),
-                    target: "Tuyết Thiên Phi".to_owned(),
-                },
-            ]
+        assert_eq!(loaded.entries, glossary.entries);
+    }
+
+    #[tokio::test]
+    async fn builds_and_persists_master_glossary_without_manual_vocabulary() {
+        let directory = tempfile::tempdir().unwrap();
+        let caption_file = directory.path().join("captions.zh.vtt");
+        fs::write(
+            &caption_file,
+            "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\n《陆清安》\n",
+        )
+        .unwrap();
+        let response = serde_json::json!({
+            "address_rules": "Dùng ta/ngươi và xưng hô tu tiên.",
+            "entries": [{
+                "src": "陆清安",
+                "target": "Lục Thanh An",
+                "category": "character_name"
+            }]
+        })
+        .to_string();
+        let (stage2_url, server) = glossary_server(&response);
+        let stage1 = Stage1Drafter::new(
+            create_client("http://127.0.0.1:1").unwrap(),
+            StageConfig::new("draft-model"),
         );
+        let stage2 = Stage2Refiner::new(
+            create_client(&stage2_url).unwrap(),
+            StageConfig::new("ERNIE-4.5-21B-A3B-Q4_K_M"),
+        );
+        let engine = TranslatorEngine::new(directory.path(), stage1, stage2).unwrap();
+        let args = Args::try_parse_from([
+            "vtt-trans",
+            "--stage",
+            "stage1",
+            "--input",
+            "source.vtt",
+            "--caption-file",
+            caption_file.to_str().unwrap(),
+        ])
+        .unwrap();
+        assert!(args.vocab.is_none());
+
+        let captions = load_caption_cues(std::slice::from_ref(&caption_file)).unwrap();
+        let glossary = resolve_master_glossary(
+            directory.path(),
+            std::slice::from_ref(&caption_file),
+            &Vocabulary::default(),
+            &args.genre,
+            &engine,
+        )
+        .await
+        .unwrap();
+        server.join().unwrap();
+
+        assert_eq!(glossary.entries.len(), 1);
+        assert_eq!(
+            load_master_glossary(&directory.path().join("master_glossary.json"))
+                .unwrap()
+                .unwrap()
+                .entries,
+            glossary.entries
+        );
+        assert_eq!(captions, vec!["《陆清安》"]);
     }
 
     #[test]

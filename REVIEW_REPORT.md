@@ -142,3 +142,20 @@ Kiểm tra chuỗi nghiêm ngặt trên từ điển thủ công đạt **57/60 
 - Tập 1, cue 32: `你` (“ngươi”) không có chuỗi đích trong bản dịch.
 
 Vì vậy, kiểm tra này xác nhận tắt reasoning và sự nhất quán của tên, nhưng **chưa đạt 100% tuân thủ chuỗi từ điển**. Thời gian Stage 2 đo được là 10 phút 40 giây cho 140 cue, không phải “vài phút”; quy đổi tuyến tính thô ra khoảng 20,7 phút/272 cue. So sánh với baseline 50 phút/272 cue chỉ mang tính định hướng vì mẫu và số batch khác nhau; kết quả này chưa chứng minh mức tăng tốc 15x. Đề xuất bổ sung hậu kiểm bắt buộc cho cue chứa từ điển: yêu cầu sửa nếu thiếu bản dịch nguyên văn, hoặc đánh dấu lỗi để người dùng rà soát thay vì âm thầm coi là đạt.
+
+## 7. ERNIE-4.5-21B-A3B-Q4_K_M — tải model và trạng thái thực nghiệm
+
+Đã tải bản `Q4_K_M` từ [unsloth/ERNIE-4.5-21B-A3B-PT-GGUF](https://huggingface.co/unsloth/ERNIE-4.5-21B-A3B-PT-GGUF), revision `de45a831ceac3c876bb63f39bc60406a7d07e3bb` (metadata ghi giấy phép Apache-2.0). Tệp nguồn `ERNIE-4.5-21B-A3B-PT-Q4_K_M.gguf` được lưu với tên `models/ERNIE-4.5-21B-A3B-Q4_K_M.gguf`.
+
+| Kiểm tra tải model | Kết quả |
+|---|---:|
+| Kích thước tệp | 13.331.015.456 bytes (12,42 GiB) |
+| SHA-256 | `eac44e96282fee37140f82f435d4c37c4ec0edd42fe5d93f09e6ed8786a6cff0` |
+| Dung lượng trống ổ C: trước tải | 72.806.797.312 bytes |
+| Dung lượng trống ổ C: sau tải | 59.472.236.544 bytes (55,39 GiB) |
+
+**Inference thực tế chưa chạy được trong phiên này.** Lệnh khởi chạy server và gọi endpoint Stage 2 bị môi trường từ chối trước khi thực thi theo quy tắc `Domain`; đã xác nhận không có tiến trình `llama-server.exe`, listener cổng 8082, `master_glossary.json` hay đầu ra `output/ernie_test/` nào được tạo. Vì vậy không có dữ liệu thực nghiệm để báo cáo nội dung glossary do ERNIE sinh, token/giây, mức RAM, chất lượng dịch hay tỷ lệ cue Stage 2 sửa/fallback. Không dùng kết quả mock hoặc số liệu Qwen ở mục 6 để thay thế các số liệu này.
+
+Hai caption đầu vào tồn tại và hai VTT nguồn có 58 và 82 cue. Để hoàn tất phép đo, cần chạy lại trong môi trường được phép bind/gọi endpoint local `127.0.0.1:8082`; khi đó chạy `build-glossary`, Stage 1 và Stage 2 tuần tự, rồi bổ sung kết quả đo và kiểm tra đầu ra vào mục này.
+
+**Lưu ý về checkpoint:** không chạy Stage 1 hai lần cho hai file riêng lẻ với cùng `--work-dir work/ernie_test`; chế độ input file đơn dùng trực tiếp thư mục này và lần chạy thứ hai sẽ thay checkpoint của lần đầu. Hãy đặt đúng hai file vào một thư mục input riêng, rồi dùng `--input <thư_mục_đó>` ở cả Stage 1 và Stage 2. Chế độ thư mục tạo checkpoint riêng từng tập bên dưới `work/ernie_test/` và vẫn nạp glossary chung từ thư mục gốc.
