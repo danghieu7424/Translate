@@ -18,10 +18,10 @@ Không chuẩn hóa timestamp, metadata, dấu câu, thẻ hoặc xuống dòng 
 
 - Tài liệu là chuỗi các đoạn theo thứ tự nguồn: header, khối opaque, cue và phần phân cách. Cách biểu diễn này tránh làm mất cấu trúc chưa được hiểu đầy đủ.
 - Mỗi `VttCue` giữ riêng identifier WebVTT (nếu có), timestamp/settings gốc, payload gốc, speaker tùy chọn và vị trí nguồn. Cue ID dùng trong pipeline là **ordinal 1-based của cue trong tài liệu**, độc lập với cue identifier của WebVTT; ID này ổn định giữa hai tầng và checkpoint.
-- Tách payload thành đoạn văn bản và inline tag. Khi dựng prompt, bảo vệ tag bằng placeholder hoặc biểu diễn cấu trúc; chỉ văn bản lời thoại được dịch. `<v Name>` cung cấp `speaker = Some(Name)` và vẫn được giữ nguyên khi xuất.
+- `VttCue` giữ nguyên payload như văn bản, đồng thời trích chuỗi inline tag theo thứ tự và `speaker = Some(Name)` từ `<v Name>`. `set_payload` chỉ nhận nội dung có đúng chuỗi tag gốc; khi xuất, tag được giữ nguyên văn và đúng thứ tự.
 - Với cue nhiều dòng, prompt biểu diễn nội dung của một cue như một bản ghi có ID duy nhất; parser phản hồi nhận các dòng tiếp nối cho tới ID kế tiếp. Khi xuất bản dịch mới, giữ line break do phản hồi cung cấp; nếu phản hồi là một dòng, cho phép reflow có kiểm soát thay vì thay đổi timestamp hay cấu trúc cue. Nội dung chưa dịch luôn giữ line break gốc.
 - Trước khi ghép lại, kiểm tra tag/placeholder được bảo toàn và cue patch chỉ nhắm tới cue ID hợp lệ. Không để nội dung mô hình sửa header, timestamp, settings hay ranh giới cue.
 
 ## Lỗi và giới hạn
 
-Parser phải phân biệt cấu trúc không hợp lệ với khối opaque hợp lệ. Lỗi cấu trúc cần chỉ ra vị trí và không được trả tài liệu một phần dưới dạng thành công. Round-trip test bao gồm header metadata, `NOTE`, cue identifier, cue settings, cue nhiều dòng, speaker tag và inline formatting. Bảo toàn byte tuyệt đối áp dụng cho tài liệu chưa sửa; với cue được dịch, bảo toàn cấu trúc và các vùng bất biến, không áp dụng cho payload văn bản đã thay đổi.
+Parser phải phân biệt cấu trúc không hợp lệ với khối opaque hợp lệ. Lỗi cấu trúc cần chỉ ra vị trí và không được trả tài liệu một phần dưới dạng thành công. Round-trip test bao gồm header metadata, `NOTE`, cue identifier, cue settings, cue nhiều dòng, speaker tag và inline formatting. Bảo toàn byte tuyệt đối áp dụng cho tài liệu chưa sửa; với cue được dịch qua `set_payload`, bảo toàn cấu trúc, chuỗi tag và kiểu xuống dòng của cue, không áp dụng cho payload văn bản đã thay đổi.

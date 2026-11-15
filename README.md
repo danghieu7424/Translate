@@ -84,7 +84,7 @@ Translate/
 └── README.md
 ```
 
-Các crate mới hiện chỉ là khung workspace; parser round-trip, client Local LLM, pipeline hai tầng và CLI `vtt-trans` chưa được triển khai. Package `translate` hiện hữu vẫn được giữ nguyên. Thiết kế và phạm vi từng giai đoạn được ghi trong `docs/`.
+`vtt-core` hiện hỗ trợ parse/serialize WebVTT theo kiểu lossless, giữ nguyên inline tags, cue nhiều dòng và các khối opaque. `llm-client`, `translator-engine` và CLI `vtt-trans` vẫn là khung chưa triển khai. Package `translate` hiện hữu vẫn được giữ nguyên. Thiết kế và phạm vi từng giai đoạn được ghi trong `docs/`.
 
 ### Lệnh kiểm tra workspace
 
