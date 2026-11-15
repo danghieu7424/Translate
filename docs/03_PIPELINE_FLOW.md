@@ -16,7 +16,7 @@ Tham số sampler mặc định: `temperature = 0.15`, `top_p = 0.9`, `repeat_pe
 
 ## Stage 2 — Context-aware refinement
 
-Chia cue có draft thành batch tối đa 20. Trước mỗi batch, lấy tối đa 5 cue liền trước đã có `final_text` thành công; cửa sổ cho phép cấu hình 3–5, mặc định 5. Context chỉ đọc, không thuộc tập cue có thể sửa. Các cue đầu file có ít context hơn; batch đầu không có context. Context dùng bản cuối đã hiệu đính, không dùng draft của batch trước nếu chưa hoàn tất Stage 2.
+Chỉ bắt đầu sau khi Stage 1 đã hoàn tất toàn bộ file và lưu checkpoint. Chia cue có draft thành batch tối đa 20. Trước mỗi batch, lấy tối đa 5 cue liền trước đã có `final_text` thành công; context chỉ đọc và không thuộc tập cue có thể sửa. Các cue đầu file có ít context hơn; batch đầu không có context. Context dùng bản cuối đã hiệu đính, không dùng draft của batch trước nếu chưa hoàn tất Stage 2.
 
 Đầu vào batch có dạng:
 
@@ -39,13 +39,13 @@ System prompt yêu cầu so sánh nguồn và draft, sửa nghĩa hoặc xưng h
 }
 ```
 
-JSON Schema yêu cầu object có `edits` là mảng; mỗi phần tử có `id` integer và `final_text` string không rỗng, không cho phép thuộc tính không khai báo. `id` trong edits phải thuộc batch hiện tại, không trùng nhau. Vì đây là diff thưa, cue không xuất hiện trong `edits` hợp lệ và giữ draft nguyên vẹn làm `final_text`; không được hiểu việc thiếu toàn bộ ID là lỗi cú pháp.
+JSON Schema yêu cầu object có `edits` là mảng; mỗi phần tử có `id` integer và `final_text` string không rỗng, không cho phép thuộc tính không khai báo. Edit trùng ID hoặc ID ngoài batch được ghi cảnh báo và bỏ qua; cue không có edit hợp lệ hoặc có tag không khớp giữ draft Stage 1 làm `final_text`. Vì đây là diff thưa, thiếu ID trong `edits` là hợp lệ.
 
 ## HTTP, response format và kiểm tra
 
 Client gửi OpenAI-compatible `POST /v1/chat/completions` qua `reqwest`, hỗ trợ `response_format: {"type":"json_object"}` và `response_format: {"type":"json_schema","json_schema":{"name":...,"strict":true,"schema":...}}`. Client truyền schema đúng nguyên dạng; server phải hỗ trợ response format tương ứng để ràng buộc đầu ra. Engine vẫn phải parse và validate nội dung JSON cục bộ vì server có thể không thực thi hoặc không hỗ trợ schema.
 
-Client không retry ngầm: lỗi transport/timeout, HTTP status, JSON response không hợp lệ hoặc thiếu content được trả rõ cho caller. Engine chịu trách nhiệm thử lại tối đa 3 lần sau lần gọi đầu khi lỗi phù hợp, kiểm tra đầu ra theo batch rồi chia đôi batch lỗi; khi chỉ còn một cue mà vẫn lỗi, trả lỗi rõ ràng. Đối với Stage 2, chỉ lỗi JSON/schema/ID ngoài batch là invalid; edits rỗng hoặc thiếu ID là kết quả hợp lệ. Retry/split không được làm mất cue hoặc áp dụng một phần patch chưa validate.
+Client không retry ngầm: lỗi transport/timeout, HTTP status, JSON response không hợp lệ hoặc thiếu content được trả rõ cho caller. Engine chịu trách nhiệm thử lại tối đa 3 lần sau lần gọi đầu khi lỗi phù hợp, kiểm tra đầu ra theo batch rồi chia đôi batch lỗi; lỗi cấu hình/request và HTTP 4xx (ngoại trừ 429) dừng ngay mà không retry/split. Khi chỉ còn một cue mà vẫn lỗi retryable, engine trả lỗi rõ ràng. Đối với Stage 2, chỉ lỗi JSON/schema/ID ngoài batch là invalid; edits rỗng hoặc thiếu ID là kết quả hợp lệ. Retry/split không được làm mất cue hoặc áp dụng một phần patch chưa validate.
 
 ## Hoàn tất và tiếp tục
 

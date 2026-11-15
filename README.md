@@ -55,7 +55,7 @@ Thư viện Rust tối ưu hóa hiệu năng cao để dịch phụ đề WebVTT
 
 ```text
 Translate/
-├── crates/                # Khung workspace VTT hai tầng (chưa triển khai logic)
+├── crates/                # Workspace VTT hai tầng
 │   ├── vtt-core/
 │   ├── llm-client/
 │   ├── translator-engine/
@@ -84,7 +84,7 @@ Translate/
 └── README.md
 ```
 
-`vtt-core` hỗ trợ parse/serialize WebVTT theo kiểu lossless, giữ nguyên inline tags, cue nhiều dòng và các khối opaque. `llm-client` cung cấp client async OpenAI-compatible với request timeout mặc định 600 giây, sampler và JSON response format/schema. `translator-engine` và CLI `vtt-trans` vẫn là khung chưa triển khai. Package `translate` hiện hữu vẫn được giữ nguyên. Thiết kế và phạm vi từng giai đoạn được ghi trong `docs/`.
+`vtt-core` hỗ trợ parse/serialize WebVTT theo kiểu lossless, giữ nguyên inline tags, cue nhiều dòng và các khối opaque. `llm-client` cung cấp client async OpenAI-compatible với request timeout mặc định 600 giây, sampler và JSON response format/schema. `translator-engine` điều phối tuần tự hai stage, xử lý batch/retry, kiểm tra tag và lưu checkpoint SHA-256 để resume; CLI `vtt-trans` vẫn chưa được triển khai. Package `translate` hiện hữu vẫn được giữ nguyên. Thiết kế và phạm vi từng giai đoạn được ghi trong `docs/`.
 
 ### Lệnh kiểm tra workspace
 
