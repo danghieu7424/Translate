@@ -92,11 +92,34 @@ impl TranslatorEngine {
     }
 
     pub async fn run(&self, source: &str) -> Result<TranslationResult, EngineError> {
-        self.run_stage1(source).await?;
-        self.run_stage2().await
+        self.run_with_progress(source, |_| {}).await
+    }
+
+    pub async fn run_with_progress<F>(
+        &self,
+        source: &str,
+        mut on_progress: F,
+    ) -> Result<TranslationResult, EngineError>
+    where
+        F: FnMut(EngineProgress),
+    {
+        self.run_stage1_with_progress(source, &mut on_progress)
+            .await?;
+        self.run_stage2_with_progress(&mut on_progress).await
     }
 
     pub async fn run_stage1(&self, source: &str) -> Result<(), EngineError> {
+        self.run_stage1_with_progress(source, |_| {}).await
+    }
+
+    pub async fn run_stage1_with_progress<F>(
+        &self,
+        source: &str,
+        mut on_progress: F,
+    ) -> Result<(), EngineError>
+    where
+        F: FnMut(EngineProgress),
+    {
         let document = VttDocument::parse(source)?;
         let mut checkpoint = self.open_or_create_checkpoint(source, &document)?;
         let prompts = document
@@ -106,6 +129,29 @@ impl TranslatorEngine {
                 source: cue.payload().to_owned(),
             })
             .collect::<Vec<_>>();
+        let total_cues = prompts.len();
+        let total_batches = total_cues.div_ceil(STAGE1_BATCH_SIZE);
+        let completed_cues = checkpoint
+            .cues
+            .iter()
+            .filter(|cue| cue.draft_text.is_some())
+            .count();
+        let completed_batches = prompts
+            .chunks(STAGE1_BATCH_SIZE)
+            .filter(|group| {
+                group
+                    .iter()
+                    .all(|cue| checkpoint.cues[cue.id - 1].draft_text.is_some())
+            })
+            .count();
+        let mut progress = ProgressTracker::new(
+            TranslationStage::Stage1,
+            total_cues,
+            total_batches,
+            completed_cues,
+            completed_batches,
+        );
+        on_progress(progress.snapshot());
 
         for group in prompts.chunks(STAGE1_BATCH_SIZE) {
             let pending = group
@@ -114,8 +160,14 @@ impl TranslatorEngine {
                 .cloned()
                 .collect::<Vec<_>>();
             if !pending.is_empty() {
-                self.process_stage1_group(&pending, &document, &mut checkpoint)
-                    .await?;
+                self.process_stage1_group(
+                    &pending,
+                    &document,
+                    &mut checkpoint,
+                    &mut progress,
+                    &mut on_progress,
+                )
+                .await?;
             }
         }
 
@@ -123,6 +175,16 @@ impl TranslatorEngine {
     }
 
     pub async fn run_stage2(&self) -> Result<TranslationResult, EngineError> {
+        self.run_stage2_with_progress(|_| {}).await
+    }
+
+    pub async fn run_stage2_with_progress<F>(
+        &self,
+        mut on_progress: F,
+    ) -> Result<TranslationResult, EngineError>
+    where
+        F: FnMut(EngineProgress),
+    {
         let source = fs::read_to_string(self.source_path())?;
         let mut document = VttDocument::parse(&source)?;
         let mut checkpoint = self.load_checkpoint(&source, &document)?;
@@ -134,6 +196,29 @@ impl TranslatorEngine {
         }
 
         let ids = checkpoint.cues.iter().map(|cue| cue.id).collect::<Vec<_>>();
+        let total_cues = ids.len();
+        let total_batches = total_cues.div_ceil(STAGE2_BATCH_SIZE);
+        let completed_cues = checkpoint
+            .cues
+            .iter()
+            .filter(|cue| cue.final_text.is_some())
+            .count();
+        let completed_batches = ids
+            .chunks(STAGE2_BATCH_SIZE)
+            .filter(|group| {
+                group
+                    .iter()
+                    .all(|id| checkpoint.cues[id - 1].final_text.is_some())
+            })
+            .count();
+        let mut progress = ProgressTracker::new(
+            TranslationStage::Stage2,
+            total_cues,
+            total_batches,
+            completed_cues,
+            completed_batches,
+        );
+        on_progress(progress.snapshot());
         let mut warnings = Vec::new();
         for group in ids.chunks(STAGE2_BATCH_SIZE) {
             let pending = group
@@ -142,8 +227,15 @@ impl TranslatorEngine {
                 .filter(|id| checkpoint.cues[id - 1].final_text.is_none())
                 .collect::<Vec<_>>();
             if !pending.is_empty() {
-                self.process_stage2_group(&pending, &document, &mut checkpoint, &mut warnings)
-                    .await?;
+                self.process_stage2_group(
+                    &pending,
+                    &document,
+                    &mut checkpoint,
+                    &mut warnings,
+                    &mut progress,
+                    &mut on_progress,
+                )
+                .await?;
             }
         }
 
@@ -168,6 +260,7 @@ impl TranslatorEngine {
         Ok(TranslationResult {
             vtt: document.serialize(),
             warnings,
+            stats: TranslationStats::from_checkpoint(&checkpoint),
         })
     }
 
@@ -223,6 +316,7 @@ impl TranslatorEngine {
                     id: cue.id(),
                     draft_text: None,
                     final_text: None,
+                    stage2_fallback: false,
                 })
                 .collect(),
         }
@@ -262,7 +356,10 @@ impl TranslatorEngine {
             let state = checkpoint.cues.get(cue.id() - 1).ok_or_else(|| {
                 EngineError::CheckpointMismatch("cue ordering does not match".to_owned())
             })?;
-            if state.id != cue.id() || (state.final_text.is_some() && state.draft_text.is_none()) {
+            if state.id != cue.id()
+                || (state.final_text.is_some() && state.draft_text.is_none())
+                || (state.stage2_fallback && state.final_text != state.draft_text)
+            {
                 return Err(EngineError::CheckpointMismatch(
                     "cue IDs or stage state are inconsistent".to_owned(),
                 ));
@@ -313,6 +410,8 @@ impl TranslatorEngine {
         cues: &[PromptCue],
         document: &VttDocument,
         checkpoint: &mut Checkpoint,
+        progress: &mut ProgressTracker,
+        on_progress: &mut impl FnMut(EngineProgress),
     ) -> Result<(), EngineError> {
         let mut pending = vec![cues.to_vec()];
         while let Some(batch) = pending.pop() {
@@ -322,8 +421,12 @@ impl TranslatorEngine {
                         checkpoint.cues[id - 1].draft_text = Some(text);
                     }
                     self.save_checkpoint(checkpoint)?;
+                    progress.complete_batch(batch.len());
+                    on_progress(progress.snapshot());
                 }
                 Err(failure) if failure.can_split && batch.len() > 1 => {
+                    progress.split_batch();
+                    on_progress(progress.snapshot());
                     let middle = batch.len().div_ceil(2);
                     pending.push(batch[middle..].to_vec());
                     pending.push(batch[..middle].to_vec());
@@ -346,6 +449,8 @@ impl TranslatorEngine {
         document: &VttDocument,
         checkpoint: &mut Checkpoint,
         warnings: &mut Vec<EngineWarning>,
+        progress: &mut ProgressTracker,
+        on_progress: &mut impl FnMut(EngineProgress),
     ) -> Result<(), EngineError> {
         let mut pending = vec![ids.to_vec()];
         while let Some(batch) = pending.pop() {
@@ -358,8 +463,12 @@ impl TranslatorEngine {
                 Ok(edits) => {
                     self.apply_edits(&batch, edits, document, checkpoint, warnings)?;
                     self.save_checkpoint(checkpoint)?;
+                    progress.complete_batch(batch.len());
+                    on_progress(progress.snapshot());
                 }
                 Err(failure) if failure.can_split && batch.len() > 1 => {
+                    progress.split_batch();
+                    on_progress(progress.snapshot());
                     let middle = batch.len().div_ceil(2);
                     pending.push(batch[middle..].to_vec());
                     pending.push(batch[..middle].to_vec());
@@ -405,21 +514,21 @@ impl TranslatorEngine {
             let draft = state.draft_text.as_deref().ok_or_else(|| {
                 EngineError::CheckpointMismatch(format!("cue {id} has no Stage 1 draft"))
             })?;
-            let final_text = match by_id.get(id).map(Vec::as_slice) {
-                None => draft.to_owned(),
+            let (final_text, stage2_fallback) = match by_id.get(id).map(Vec::as_slice) {
+                None => (draft.to_owned(), false),
                 Some([edit]) => {
                     let cue = document.cue(*id).ok_or_else(|| {
                         EngineError::CheckpointMismatch(format!("cue {id} is missing from source"))
                     })?;
                     match validate_payload(cue, edit) {
-                        Ok(text) => text,
+                        Ok(text) => (text, false),
                         Err(error) => {
                             record_warning(
                                 warnings,
                                 *id,
                                 format!("unsafe edit rejected ({error}); keeping Stage 1 draft"),
                             );
-                            draft.to_owned()
+                            (draft.to_owned(), true)
                         }
                     }
                 }
@@ -429,10 +538,11 @@ impl TranslatorEngine {
                         *id,
                         "duplicate edits for cue; keeping Stage 1 draft".to_owned(),
                     );
-                    draft.to_owned()
+                    (draft.to_owned(), true)
                 }
             };
             state.final_text = Some(final_text);
+            state.stage2_fallback = stage2_fallback;
         }
         Ok(())
     }
@@ -538,10 +648,66 @@ pub struct EngineWarning {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TranslationStage {
+    Stage1,
+    Stage2,
+}
+
+impl std::fmt::Display for TranslationStage {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Stage1 => formatter.write_str("Stage 1"),
+            Self::Stage2 => formatter.write_str("Stage 2"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EngineProgress {
+    pub stage: TranslationStage,
+    pub completed_batches: usize,
+    pub total_batches: usize,
+    pub completed_cues: usize,
+    pub total_cues: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TranslationResult {
     pub vtt: String,
     pub warnings: Vec<EngineWarning>,
+    pub stats: TranslationStats,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TranslationStats {
+    pub total_cues: usize,
+    pub translated_cues: usize,
+    pub stage2_changed_cues: usize,
+    pub fallback_cues: usize,
+}
+
+impl TranslationStats {
+    fn from_checkpoint(checkpoint: &Checkpoint) -> Self {
+        Self {
+            total_cues: checkpoint.cues.len(),
+            translated_cues: checkpoint
+                .cues
+                .iter()
+                .filter(|cue| cue.draft_text.is_some())
+                .count(),
+            stage2_changed_cues: checkpoint
+                .cues
+                .iter()
+                .filter(|cue| cue.final_text != cue.draft_text)
+                .count(),
+            fallback_cues: checkpoint
+                .cues
+                .iter()
+                .filter(|cue| cue.stage2_fallback)
+                .count(),
+        }
+    }
 }
 
 #[derive(Debug, Error)]
@@ -584,6 +750,8 @@ struct CueState {
     id: usize,
     draft_text: Option<String>,
     final_text: Option<String>,
+    #[serde(default)]
+    stage2_fallback: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -616,6 +784,43 @@ struct CueEdit {
 struct BatchFailure {
     reason: String,
     can_split: bool,
+}
+
+struct ProgressTracker {
+    state: EngineProgress,
+}
+
+impl ProgressTracker {
+    fn new(
+        stage: TranslationStage,
+        total_cues: usize,
+        total_batches: usize,
+        completed_cues: usize,
+        completed_batches: usize,
+    ) -> Self {
+        Self {
+            state: EngineProgress {
+                stage,
+                completed_batches,
+                total_batches,
+                completed_cues,
+                total_cues,
+            },
+        }
+    }
+
+    fn snapshot(&self) -> EngineProgress {
+        self.state.clone()
+    }
+
+    fn complete_batch(&mut self, cue_count: usize) {
+        self.state.completed_batches += 1;
+        self.state.completed_cues += cue_count;
+    }
+
+    fn split_batch(&mut self) {
+        self.state.total_batches += 1;
+    }
 }
 
 fn stage_fingerprint(config: &StageConfig) -> StageFingerprint {
@@ -1142,6 +1347,15 @@ mod tests {
         assert_eq!(result.warnings.len(), 2);
         assert!(result.warnings.iter().any(|warning| warning.cue_id == 2));
         assert!(result.warnings.iter().any(|warning| warning.cue_id == 99));
+        assert_eq!(
+            result.stats,
+            TranslationStats {
+                total_cues: 3,
+                translated_cues: 3,
+                stage2_changed_cues: 1,
+                fallback_cues: 1,
+            }
+        );
     }
 
     #[tokio::test]
@@ -1163,7 +1377,11 @@ mod tests {
         let work_dir = tempdir().unwrap();
         let engine = engine(work_dir.path(), stage1_url, stage2_url);
 
-        engine.run_stage1(&source).await.unwrap();
+        let mut progress = Vec::new();
+        engine
+            .run_stage1_with_progress(&source, |update| progress.push(update))
+            .await
+            .unwrap();
         let request_bodies = (0..6)
             .map(|_| requests.recv_timeout(Duration::from_secs(2)).unwrap())
             .collect::<Vec<_>>();
@@ -1187,6 +1405,10 @@ mod tests {
                 .unwrap()
                 .contains("[2] source 2")
         );
+        assert_eq!(progress.first().unwrap().total_batches, 1);
+        assert_eq!(progress.last().unwrap().completed_batches, 2);
+        assert_eq!(progress.last().unwrap().total_batches, 2);
+        assert_eq!(progress.last().unwrap().completed_cues, 2);
     }
 
     #[tokio::test]

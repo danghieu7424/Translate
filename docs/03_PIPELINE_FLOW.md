@@ -50,3 +50,5 @@ Client không retry ngầm: lỗi transport/timeout, HTTP status, JSON response 
 ## Hoàn tất và tiếp tục
 
 Mỗi batch chỉ được commit vào `TranslationState` sau khi cả phản hồi và patch vượt kiểm tra. Stage 2 xây context từ các cue đã commit trước đó theo thứ tự tài liệu. Resume bỏ qua batch đã checkpoint thành công và tiếp tục từ trạng thái cue; xuất cuối dùng `final_text` nếu có, nếu không dùng draft, ghép vào cấu trúc VTT gốc và giữ nguyên mọi vùng bất biến.
+
+CLI `vtt-trans` dùng `--stage stage1|stage2|all` (mặc định `all`). Chạy riêng Stage 1 ghi checkpoint và bản nguồn vào work directory; Stage 2 đọc lại các file này để có thể khởi động server/model khác trước khi tiếp tục. Thanh tiến trình dựa trên số cue hoàn tất và ETA trung bình, còn batch count được cập nhật khi engine phải chia nhỏ batch. Hướng dẫn lệnh server nằm trong `crates/vtt-cli/README.md`.

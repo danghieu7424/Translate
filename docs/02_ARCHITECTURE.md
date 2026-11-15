@@ -16,6 +16,7 @@ vtt-cli -> translator-engine -> { vtt-core, llm-client }
 - **`VttCue`**: cue ID pipeline ổn định, cue identifier gốc tùy chọn, vùng timestamp/settings nguyên gốc, payload/tag và vị trí nguồn; `speaker: Option<String>` được trích từ `<v Name>`. Trạng thái dịch gắn với cue hoặc lưu riêng trong `TranslationState`, không ghi đè nguồn.
 - **`TranslationState`**: phiên bản schema, SHA-256 đầu vào, fingerprint hai stage và trạng thái theo cue (`pending`, `drafted`, `refined`), gồm bản nháp/bản cuối.
 - **`CuePatch`**: `{ id, final_text }`. Chỉ payload cue tương ứng được phép thay đổi; edit trùng ID, ID ngoài batch hoặc vi phạm bảo toàn tag được ghi cảnh báo, cue đó dùng lại draft Stage 1 và engine tiếp tục.
+- **Tiến độ và thống kê**: `EngineProgress` báo stage, số batch/cue hoàn tất và tổng số; `TranslationStats` tổng hợp cue đã dịch, cue Stage 2 thực sự đổi nội dung và cue fallback do edit không an toàn/trùng.
 
 ## Checkpoint / resume
 

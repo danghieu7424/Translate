@@ -1,8 +1,20 @@
 [package]
 name = "vtt-cli"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 license = "MIT"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+indicatif = "0.18"
+llm-client = { path = "../llm-client" }
+translator-engine = { path = "../translator-engine" }
+vtt-core = { path = "../vtt-core" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[dev-dependencies]
+tempfile = "3"
 
 [[bin]]
 name = "vtt-trans"

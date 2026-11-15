@@ -9,3 +9,5 @@
 - Triển khai `llm-client::LlmClient` cho OpenAI-compatible chat completions, timeout CPU dài, sampler và response format JSON.
 - Triển khai `translator-engine` với Stage 1/2 tuần tự, batching, retry/split có phân loại lỗi, context tối đa 5 cue, kiểm tra inline tags và fallback có cảnh báo.
 - Thêm checkpoint JSON nguyên tử có SHA-256, xác thực model/config và resume cho pipeline dịch.
+- Thêm API tiến độ theo batch/cue và thống kê số cue Stage 2 thay đổi hoặc fallback trong `translator-engine`.
+- Triển khai `vtt-trans` với `--stage stage1|stage2|all`, progress bar trên stderr, output summary và hướng dẫn llama-server/Ollama.
