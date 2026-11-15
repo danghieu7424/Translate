@@ -1,12 +1,15 @@
 use anyhow::{Context, Result, bail};
-use clap::{Parser, ValueEnum};
+use clap::{ArgAction, Parser, ValueEnum};
 use indicatif::{ProgressBar, ProgressDrawTarget, ProgressStyle};
 use llm_client::{ClientConfig, LlmClient};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use translator_engine::{
-    EngineProgress, Stage1Drafter, Stage2Refiner, StageConfig, TranslationResult, TranslationStage,
-    TranslatorEngine, Vocabulary,
+    EngineProgress, GlossaryEntry, Stage1Drafter, Stage2Refiner, StageConfig, TranslationResult,
+    TranslationStage, TranslatorEngine, Vocabulary,
 };
 use vtt_core::VttDocument;
 
@@ -31,13 +34,19 @@ struct Args {
     work_dir: PathBuf,
     #[arg(long)]
     vocab: Option<PathBuf>,
+    #[arg(long = "caption-file", action = ArgAction::Append, value_name = "PATH")]
+    caption_files: Vec<PathBuf>,
+    #[arg(long, default_value_t = 20)]
+    stage1_batch_size: usize,
+    #[arg(long, default_value_t = 35)]
+    stage2_batch_size: usize,
     #[arg(long, default_value = "http://127.0.0.1:8080/v1")]
     stage1_base_url: String,
     #[arg(long, default_value = "http://127.0.0.1:8080/v1")]
     stage2_base_url: String,
     #[arg(long, default_value = "Hy-MT2-30B-A3B")]
     stage1_model: String,
-    #[arg(long, default_value = "Qwen-30B-A3B")]
+    #[arg(long, default_value = "Qwen3-30B-A3B")]
     stage2_model: String,
 }
 
@@ -59,13 +68,23 @@ async fn main() -> Result<()> {
     .context("invalid progress bar template")?
     .progress_chars("=>-");
     let vocabulary = load_vocabulary(args.vocab.as_deref())?;
+    let caption_files = collect_caption_files(&args.caption_files)?;
     let input_files = match args.input.as_deref() {
         Some(path) => collect_inputs(path)?,
         None => vec![],
     };
 
     if args.stage == StageSelection::Stage2 && input_files.is_empty() {
-        let engine = create_engine(&args, &args.work_dir, vocabulary)?;
+        let engine = create_engine(&args, &args.work_dir)?;
+        let vocabulary = resolve_vocabulary(
+            args.stage,
+            &args.work_dir,
+            &caption_files,
+            &vocabulary,
+            &engine,
+        )
+        .await?;
+        let engine = engine.with_vocabulary(vocabulary);
         let mut progress = progress_reporter(style);
         let result = engine
             .run_stage2_with_progress(&mut progress)
@@ -85,7 +104,16 @@ async fn main() -> Result<()> {
         } else {
             args.work_dir.clone()
         };
-        let engine = create_engine(&args, &work_dir, vocabulary.clone())?;
+        let engine = create_engine(&args, &work_dir)?;
+        let vocabulary = resolve_vocabulary(
+            args.stage,
+            &args.work_dir,
+            &caption_files,
+            &vocabulary,
+            &engine,
+        )
+        .await?;
+        let engine = engine.with_vocabulary(vocabulary);
         let mut progress = progress_reporter(style.clone());
 
         match args.stage {
@@ -129,6 +157,9 @@ async fn main() -> Result<()> {
 
 fn validate_args(args: &Args) -> Result<()> {
     let input_is_dir = args.input.as_deref().is_some_and(Path::is_dir);
+    if args.stage1_batch_size == 0 || args.stage2_batch_size == 0 {
+        bail!("batch sizes must be greater than zero");
+    }
     if args.output.is_some() && args.output_dir.is_some() {
         bail!("use either --output or --output-dir, not both");
     }
@@ -163,7 +194,7 @@ fn validate_args(args: &Args) -> Result<()> {
     Ok(())
 }
 
-fn create_engine(args: &Args, work_dir: &Path, vocabulary: Vocabulary) -> Result<TranslatorEngine> {
+fn create_engine(args: &Args, work_dir: &Path) -> Result<TranslatorEngine> {
     let stage1 = Stage1Drafter::new(
         create_client(&args.stage1_base_url)?,
         StageConfig::new(&args.stage1_model),
@@ -173,7 +204,7 @@ fn create_engine(args: &Args, work_dir: &Path, vocabulary: Vocabulary) -> Result
         StageConfig::new(&args.stage2_model),
     );
     TranslatorEngine::new(work_dir, stage1, stage2)
-        .map(|engine| engine.with_vocabulary(vocabulary))
+        .and_then(|engine| engine.with_batch_sizes(args.stage1_batch_size, args.stage2_batch_size))
         .context("invalid engine configuration")
 }
 
@@ -203,16 +234,200 @@ fn collect_inputs(input: &Path) -> Result<Vec<PathBuf>> {
                 && path
                     .extension()
                     .is_some_and(|extension| extension.eq_ignore_ascii_case("vtt"))
+                && !path
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .is_some_and(|stem| stem.to_ascii_lowercase().ends_with(".vi"))
         })
         .collect::<Vec<_>>();
     files.sort();
     if files.is_empty() {
         bail!(
-            "input directory contains no .vtt files: {}",
+            "input directory contains no source .vtt files: {}",
             input.display()
         );
     }
     Ok(files)
+}
+
+fn collect_caption_files(inputs: &[PathBuf]) -> Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    for input in inputs {
+        if input.is_file() {
+            if !is_vtt_file(input) {
+                bail!(
+                    "caption file must have a .vtt extension: {}",
+                    input.display()
+                );
+            }
+            files.push(input.to_path_buf());
+        } else if input.is_dir() {
+            collect_caption_directory(input, &mut files)?;
+        } else {
+            bail!("caption path does not exist: {}", input.display());
+        }
+    }
+
+    files.sort();
+    files.dedup();
+    if !inputs.is_empty() && files.is_empty() {
+        bail!("caption paths contain no .vtt files");
+    }
+    Ok(files)
+}
+
+fn collect_caption_directory(directory: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
+    let mut entries = fs::read_dir(directory)
+        .with_context(|| format!("failed to list caption directory {}", directory.display()))?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<std::io::Result<Vec<_>>>()
+        .with_context(|| format!("failed to read caption directory {}", directory.display()))?;
+    entries.sort();
+
+    for path in entries {
+        let file_type = fs::symlink_metadata(&path)
+            .with_context(|| format!("failed to inspect caption path {}", path.display()))?
+            .file_type();
+        if file_type.is_dir() {
+            collect_caption_directory(&path, files)?;
+        } else if file_type.is_file() && is_vtt_file(&path) {
+            files.push(path);
+        }
+    }
+    Ok(())
+}
+
+fn is_vtt_file(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("vtt"))
+}
+
+fn load_caption_cues(files: &[PathBuf], vocabulary: &Vocabulary) -> Result<Vec<String>> {
+    let mut captions = Vec::new();
+    let mut seen = HashSet::new();
+    for path in files {
+        let contents = fs::read_to_string(path)
+            .with_context(|| format!("failed to read caption file {}", path.display()))?;
+        let document = VttDocument::parse(&contents)
+            .with_context(|| format!("invalid caption WebVTT {}", path.display()))?;
+        for cue in document.cues() {
+            let source = cue.payload().trim();
+            if is_repeated_warning(source) {
+                continue;
+            }
+
+            let candidate = vocabulary.remove_known_terms(source);
+            let candidate = candidate.trim_matches(|character: char| {
+                character.is_whitespace() || "《》〈〉-—:：，,。.!！?？、".contains(character)
+            });
+            if candidate.chars().any(char::is_alphanumeric) && seen.insert(candidate.to_owned()) {
+                captions.push(candidate.to_owned());
+            }
+        }
+    }
+    Ok(captions)
+}
+
+fn is_repeated_warning(source: &str) -> bool {
+    source.contains("危险动作请勿模仿")
+        || source.contains("危险动作请勿随意模仿")
+        || source.contains("危险动作不应模仿")
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AutoGlossaryCache {
+    version: u32,
+    caption_sha256: String,
+    entries: Vec<GlossaryEntry>,
+}
+
+async fn resolve_vocabulary(
+    stage: StageSelection,
+    work_dir: &Path,
+    caption_files: &[PathBuf],
+    manual_vocabulary: &Vocabulary,
+    engine: &TranslatorEngine,
+) -> Result<Vocabulary> {
+    let cache_path = work_dir.join("auto_glossary.json");
+    let captions = if caption_files.is_empty() {
+        None
+    } else {
+        Some(load_caption_cues(caption_files, manual_vocabulary)?)
+    };
+    let cached = load_auto_glossary(&cache_path)?;
+    let automatic = match (stage, captions.as_ref(), cached) {
+        (StageSelection::Stage2, Some(captions), Some(cache)) => {
+            let fingerprint = caption_fingerprint(captions)?;
+            if cache.caption_sha256 != fingerprint {
+                bail!(
+                    "caption files do not match the auto glossary cache in {}; rerun Stage 1",
+                    work_dir.display()
+                );
+            }
+            Vocabulary::from_entries(cache.entries).context("invalid auto glossary entries")?
+        }
+        (StageSelection::Stage2, Some(_), None) => {
+            bail!(
+                "auto glossary cache is missing in {}; run Stage 1 with --caption-file first",
+                work_dir.display()
+            );
+        }
+        (StageSelection::Stage2, None, Some(cache))
+        | (StageSelection::Stage1 | StageSelection::All, None, Some(cache)) => {
+            Vocabulary::from_entries(cache.entries).context("invalid auto glossary entries")?
+        }
+        (StageSelection::Stage1 | StageSelection::All, Some(captions), cache) => {
+            let fingerprint = caption_fingerprint(captions)?;
+            if let Some(cache) = cache.filter(|cache| cache.caption_sha256 == fingerprint) {
+                Vocabulary::from_entries(cache.entries).context("invalid auto glossary entries")?
+            } else {
+                let vocabulary = engine.translate_caption_terms(captions).await?;
+                let cache = AutoGlossaryCache {
+                    version: 1,
+                    caption_sha256: fingerprint,
+                    entries: vocabulary.entries(),
+                };
+                fs::create_dir_all(work_dir).with_context(|| {
+                    format!("failed to create work directory {}", work_dir.display())
+                })?;
+                fs::write(&cache_path, serde_json::to_vec_pretty(&cache)?).with_context(|| {
+                    format!(
+                        "failed to write auto glossary cache {}",
+                        cache_path.display()
+                    )
+                })?;
+                vocabulary
+            }
+        }
+        (_, None, None) => Vocabulary::default(),
+    };
+    Ok(manual_vocabulary.clone().merge(automatic))
+}
+
+fn load_auto_glossary(path: &Path) -> Result<Option<AutoGlossaryCache>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let contents = fs::read(path)
+        .with_context(|| format!("failed to read auto glossary cache {}", path.display()))?;
+    let cache: AutoGlossaryCache = serde_json::from_slice(&contents)
+        .with_context(|| format!("invalid auto glossary cache {}", path.display()))?;
+    if cache.version != 1 {
+        bail!(
+            "unsupported auto glossary cache version {} in {}",
+            cache.version,
+            path.display()
+        );
+    }
+    Vocabulary::from_entries(cache.entries.clone())
+        .with_context(|| format!("invalid auto glossary entries in {}", path.display()))?;
+    Ok(Some(cache))
+}
+
+fn caption_fingerprint(captions: &[String]) -> Result<String> {
+    let serialized = serde_json::to_vec(captions)?;
+    Ok(format!("{:x}", Sha256::digest(serialized)))
 }
 
 fn directory_work_dir(base: &Path, input_dir: &Path, file: &Path) -> Result<PathBuf> {
@@ -346,6 +561,8 @@ mod tests {
             Args::try_parse_from(["vtt-trans", "--input", "source.vtt", "--output", "out.vtt"])
                 .unwrap();
         assert_eq!(defaults.stage, StageSelection::All);
+        assert_eq!(defaults.stage1_batch_size, 20);
+        assert_eq!(defaults.stage2_batch_size, 35);
         assert!(validate_args(&defaults).is_ok());
 
         for (stage, expected) in [
@@ -365,6 +582,51 @@ mod tests {
             .unwrap();
             assert_eq!(args.stage, expected);
         }
+    }
+
+    #[test]
+    fn caption_files_and_batch_sizes_are_configurable_from_cli() {
+        let args = Args::try_parse_from([
+            "vtt-trans",
+            "--stage",
+            "stage1",
+            "--input",
+            "source.vtt",
+            "--caption-file",
+            "captions-one.vtt",
+            "--caption-file",
+            "captions-dir",
+            "--stage1-batch-size",
+            "12",
+            "--stage2-batch-size",
+            "28",
+        ])
+        .unwrap();
+
+        assert_eq!(
+            args.caption_files,
+            vec![
+                PathBuf::from("captions-one.vtt"),
+                PathBuf::from("captions-dir")
+            ]
+        );
+        assert_eq!(args.stage1_batch_size, 12);
+        assert_eq!(args.stage2_batch_size, 28);
+    }
+
+    #[test]
+    fn zero_batch_size_is_rejected() {
+        let args = Args::try_parse_from([
+            "vtt-trans",
+            "--stage",
+            "stage1",
+            "--input",
+            "source.vtt",
+            "--stage1-batch-size",
+            "0",
+        ])
+        .unwrap();
+        assert!(validate_args(&args).is_err());
     }
 
     #[test]
@@ -400,6 +662,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         fs::write(directory.path().join("b.VTT"), "WEBVTT\n").unwrap();
         fs::write(directory.path().join("a.vtt"), "WEBVTT\n").unwrap();
+        fs::write(directory.path().join("prior.vi.vtt"), "WEBVTT\n").unwrap();
         fs::write(directory.path().join("movie.mp4"), []).unwrap();
         fs::create_dir(directory.path().join("nested")).unwrap();
         fs::write(directory.path().join("nested\\ignored.vtt"), "WEBVTT\n").unwrap();
@@ -415,6 +678,95 @@ mod tests {
         assert_eq!(
             directory_work_dir(Path::new("work"), Path::new("in"), &files[0]).unwrap(),
             PathBuf::from("work").join("in").join("a")
+        );
+    }
+
+    #[test]
+    fn caption_directories_are_recursive_and_known_terms_and_warnings_are_filtered() {
+        let directory = tempfile::tempdir().unwrap();
+        let nested = directory.path().join("nested");
+        fs::create_dir(&nested).unwrap();
+        fs::write(
+            directory.path().join("captions.vtt"),
+            concat!(
+                "WEBVTT\n\n",
+                "00:00:00.000 --> 00:00:01.000\n危险动作请勿模仿\n\n",
+                "00:00:01.000 --> 00:00:02.000\n《陆清安-雪天妃》\n\n",
+                "00:00:02.000 --> 00:00:03.000\n《雪天妃》\n\n",
+                "00:00:03.000 --> 00:00:04.000\n陆清安\n\n",
+            ),
+        )
+        .unwrap();
+        fs::write(
+            nested.join("more.VTT"),
+            "WEBVTT\n\n00:00:00.000 --> 00:00:01.000\n幽冥之主\n\n",
+        )
+        .unwrap();
+        fs::write(nested.join("ignored.mp4"), []).unwrap();
+
+        let files = collect_caption_files(&[directory.path().to_path_buf()]).unwrap();
+        let vocabulary = Vocabulary::parse("陆清安 = Lục Thanh An").unwrap();
+        let captions = load_caption_cues(&files, &vocabulary).unwrap();
+
+        assert_eq!(files.len(), 2);
+        assert_eq!(captions, vec!["雪天妃", "幽冥之主"]);
+    }
+
+    #[tokio::test]
+    async fn cached_auto_glossary_is_merged_below_manual_vocabulary() {
+        let directory = tempfile::tempdir().unwrap();
+        let cache = AutoGlossaryCache {
+            version: 1,
+            caption_sha256: "caption-hash".to_owned(),
+            entries: vec![
+                GlossaryEntry {
+                    src: "陆清安".to_owned(),
+                    target: "wrong auto name".to_owned(),
+                },
+                GlossaryEntry {
+                    src: "雪天妃".to_owned(),
+                    target: "Tuyết Thiên Phi".to_owned(),
+                },
+            ],
+        };
+        fs::write(
+            directory.path().join("auto_glossary.json"),
+            serde_json::to_vec(&cache).unwrap(),
+        )
+        .unwrap();
+        let manual = Vocabulary::parse("陆清安 = Lục Thanh An").unwrap();
+        let stage1 = Stage1Drafter::new(
+            create_client("http://127.0.0.1:1").unwrap(),
+            StageConfig::new("draft-model"),
+        );
+        let stage2 = Stage2Refiner::new(
+            create_client("http://127.0.0.1:1").unwrap(),
+            StageConfig::new("refine-model"),
+        );
+        let engine = TranslatorEngine::new(directory.path(), stage1, stage2).unwrap();
+
+        let combined = resolve_vocabulary(
+            StageSelection::Stage2,
+            directory.path(),
+            &[],
+            &manual,
+            &engine,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            combined.entries(),
+            vec![
+                GlossaryEntry {
+                    src: "陆清安".to_owned(),
+                    target: "Lục Thanh An".to_owned(),
+                },
+                GlossaryEntry {
+                    src: "雪天妃".to_owned(),
+                    target: "Tuyết Thiên Phi".to_owned(),
+                },
+            ]
         );
     }
 

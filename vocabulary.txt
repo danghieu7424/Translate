@@ -18,6 +18,7 @@
 妈妈 = mẹ
 我 = ta
 你 = ngươi
+你们 = các ngươi
 妻子 = thê tử
 丈夫 = phu quân
 老婆 = thê tử
@@ -67,6 +68,7 @@
 徐清莹 = Từ Thanh Oánh
 清莹 = Thanh Oánh
 陆子萱 = Lục Tử Huyên
+陆紫萱 = Lục Tử Huyên
 子萱 = Tử Huyên
 陆淼淼 = Lục Miểu Miểu
 淼淼 = Miểu Miểu

@@ -259,6 +259,8 @@ pub struct ChatRequest {
     pub sampling: SamplingParams,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub response_format: Option<ResponseFormat>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chat_template_kwargs: Option<Value>,
 }
 
 impl ChatRequest {
@@ -268,6 +270,7 @@ impl ChatRequest {
             messages,
             sampling: SamplingParams::default(),
             response_format: None,
+            chat_template_kwargs: None,
         }
     }
 
@@ -441,6 +444,7 @@ mod tests {
                 }),
             },
         });
+        request.chat_template_kwargs = Some(json!({"enable_thinking": false}));
 
         let completion = client.complete(&request).await.unwrap();
         let body: Value = serde_json::from_str(&request_body.recv().unwrap()).unwrap();
@@ -457,6 +461,7 @@ mod tests {
         assert_eq!(body["frequency_penalty"], 0.2);
         assert_eq!(body["max_tokens"], 512);
         assert_eq!(body["response_format"]["type"], "json_schema");
+        assert_eq!(body["chat_template_kwargs"]["enable_thinking"], false);
         assert!(
             body["response_format"]["json_schema"]["strict"]
                 .as_bool()
