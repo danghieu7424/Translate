@@ -143,7 +143,9 @@ Kiểm tra chuỗi nghiêm ngặt trên từ điển thủ công đạt **57/60 
 
 Vì vậy, kiểm tra này xác nhận tắt reasoning và sự nhất quán của tên, nhưng **chưa đạt 100% tuân thủ chuỗi từ điển**. Thời gian Stage 2 đo được là 10 phút 40 giây cho 140 cue, không phải “vài phút”; quy đổi tuyến tính thô ra khoảng 20,7 phút/272 cue. So sánh với baseline 50 phút/272 cue chỉ mang tính định hướng vì mẫu và số batch khác nhau; kết quả này chưa chứng minh mức tăng tốc 15x. Đề xuất bổ sung hậu kiểm bắt buộc cho cue chứa từ điển: yêu cầu sửa nếu thiếu bản dịch nguyên văn, hoặc đánh dấu lỗi để người dùng rà soát thay vì âm thầm coi là đạt.
 
-## 7. ERNIE-4.5-21B-A3B-Q4_K_M — tải model và trạng thái thực nghiệm
+## 7. ERNIE-4.5-21B-A3B-Q4_K_M — thực nghiệm trên hai tập
+
+### Model và cấu hình chạy
 
 Đã tải bản `Q4_K_M` từ [unsloth/ERNIE-4.5-21B-A3B-PT-GGUF](https://huggingface.co/unsloth/ERNIE-4.5-21B-A3B-PT-GGUF), revision `de45a831ceac3c876bb63f39bc60406a7d07e3bb` (metadata ghi giấy phép Apache-2.0). Tệp nguồn `ERNIE-4.5-21B-A3B-PT-Q4_K_M.gguf` được lưu với tên `models/ERNIE-4.5-21B-A3B-Q4_K_M.gguf`.
 
@@ -154,8 +156,61 @@ Vì vậy, kiểm tra này xác nhận tắt reasoning và sự nhất quán c�
 | Dung lượng trống ổ C: trước tải | 72.806.797.312 bytes |
 | Dung lượng trống ổ C: sau tải | 59.472.236.544 bytes (55,39 GiB) |
 
-**Inference thực tế chưa chạy được trong phiên này.** Lệnh khởi chạy server và gọi endpoint Stage 2 bị môi trường từ chối trước khi thực thi theo quy tắc `Domain`; đã xác nhận không có tiến trình `llama-server.exe`, listener cổng 8082, `master_glossary.json` hay đầu ra `output/ernie_test/` nào được tạo. Vì vậy không có dữ liệu thực nghiệm để báo cáo nội dung glossary do ERNIE sinh, token/giây, mức RAM, chất lượng dịch hay tỷ lệ cue Stage 2 sửa/fallback. Không dùng kết quả mock hoặc số liệu Qwen ở mục 6 để thay thế các số liệu này.
+Chạy tuần tự trên CPU, `-ngl 0`, 6 threads. ERNIE dùng `-c 8192 --cache-type-k q8_0 --cache-type-v q8_0` trên cổng 8082; Hy-MT2 dùng `-c 6144` cùng kiểu cache trên cổng 8081. Không truyền `--vocab`. Glossary được tạo từ hai caption tại `in/.tmp_S02E001/captions.zh.vtt` và `in/.tmp_S02E002/captions.zh.vtt`, lưu ở `work/ernie_test/master_glossary.json`.
 
-Hai caption đầu vào tồn tại và hai VTT nguồn có 58 và 82 cue. Để hoàn tất phép đo, cần chạy lại trong môi trường được phép bind/gọi endpoint local `127.0.0.1:8082`; khi đó chạy `build-glossary`, Stage 1 và Stage 2 tuần tự, rồi bổ sung kết quả đo và kiểm tra đầu ra vào mục này.
+Để tránh ghi đè checkpoint, hai VTT nguồn được copy vào `work/ernie_test/inputs/` và chạy theo chế độ input thư mục. Checkpoint mỗi tập nằm riêng trong thư mục con tương ứng; glossary dùng chung ở `work/ernie_test/`. SHA-256 của mỗi VTT nguồn khớp với bản copy và `source.vtt` trong checkpoint, nên nguồn không bị sửa.
 
-**Lưu ý về checkpoint:** không chạy Stage 1 hai lần cho hai file riêng lẻ với cùng `--work-dir work/ernie_test`; chế độ input file đơn dùng trực tiếp thư mục này và lần chạy thứ hai sẽ thay checkpoint của lần đầu. Hãy đặt đúng hai file vào một thư mục input riêng, rồi dùng `--input <thư_mục_đó>` ở cả Stage 1 và Stage 2. Chế độ thư mục tạo checkpoint riêng từng tập bên dưới `work/ernie_test/` và vẫn nạp glossary chung từ thư mục gốc.
+### Glossary ERNIE sinh
+
+Một request duy nhất nhận 309 prompt token và sinh 516 token trong 58,1 giây inference (10,07 token/giây); thời gian lệnh là 58,05 giây. Server sẵn sàng sau 14,7 giây. Glossary có 9 entry và quy tắc xưng hô:
+
+> Văn phong cổ trang, Hán Việt; ưu tiên ta/ngươi, huynh/muội và xưng hô tu tiên theo vai vế; không hiện đại hóa thuật ngữ.
+
+| Source | Target do ERNIE sinh | Category |
+|---|---|---|
+| `《陆清安-妖魔体状态》` | Lục Thanh An (trạng thái Bảo Mô Tử) | character_name |
+| `《三位神明境強者》` | Ba vị Thần Minh Cảnh Quân | character_name |
+| `《本体人形-黑龙》` | Thân thể Người Hắc Long (thể hiện chính thức của Bảo Mô Tử) | character_name |
+| `《黑龙身外化身》` | Hắc Long (thân thể ngoại hình) | character_name |
+| `《地底溶洞》` | Hầm Nước Đá Ngầm (Địa Độ) | place |
+| `《祝擎天》` | Chúc Kình Thiên | character_name |
+| `《肖清逸》` | Tào Thanh Dịch | character_name |
+| `《雪天妃》` | Tuyết Thiên Phục | character_name |
+| `《骆丹茲》` | Lạc Đan Tư | character_name |
+
+Kiểm tra chuỗi cho thấy **9/9 target** xuất hiện trong đầu ra ít nhất một lần; không có cảnh báo hậu kiểm Stage 2. Đây chỉ xác nhận tính nhất quán với glossary đã sinh, **không xác nhận glossary đúng về ngữ nghĩa**. Có lỗi đáng kể: `肖清逸` nhiều khả năng phải là Tiêu Thanh Dật, `雪天妃` là Tuyết Thiên Phi; `地底溶洞` bị dịch không tự nhiên/sai nghĩa; `妖魔体` bị gán thành “Bảo Mô Tử”, và entry `三位神明境強者` là mô tả chung nhưng bị phân loại thành tên nhân vật. Entry `本体人形-黑龙` còn thêm phần giải thích không có căn cứ trong source. Cần duyệt/sửa `master_glossary.json` trước khi dùng cho toàn bộ series.
+
+### Dịch và kiểm tra đầu ra
+
+| Tập | Cue nguồn/đích | Stage 2 đổi | Fallback | Đầu ra |
+|---|---:|---:|---:|---|
+| S02E001 | 58/58 | 2 | 0 | `output/ernie_test/S02E001.merged.zh.vi.vtt` |
+| S02E002 | 82/82 | 5 | 0 | `output/ernie_test/S02E002.merged.zh.vi.vtt` |
+| **Tổng** | **140/140** | **7 (5,00%)** | **0** | |
+
+Kiểm thử tạm thời bằng `vtt_core::VttDocument::parse` đạt **2/2** file; số cue, start/end timecode, identifier, settings và inline tag khớp nguồn tuyệt đối. 25 cặp chú thích `《...》` trong nguồn thành 25 cặp `〈...〉` trong đích; không còn `《`/`》`. Tệp kiểm thử tạm đã được xóa sau khi xác minh. Đầu ra vẫn cần biên tập ngữ nghĩa: glossary sai khiến vài chú thích tên sai nhất quán; còn có chỗ xưng hô `ngươi/người` chưa đồng nhất.
+
+### Thời gian, token và RAM
+
+Token/giây là tốc độ sinh có trọng số từ `eval time` của llama-server, không tính prompt-eval. Thời gian CLI tính sau khi server đã sẵn sàng.
+
+| Giai đoạn | CLI elapsed | Request | Prompt token | Token sinh | Sinh token/giây | Tổng inference server |
+|---|---:|---:|---:|---:|---:|---:|
+| ERNIE — build-glossary | 58,05 giây | 1 | 309 | 516 | 10,07 | 58,1 giây |
+| Hy-MT2 — Stage 1 | 366,5 giây | 8 | 2.338 | 2.720 | 9,61 | 365,0 giây |
+| ERNIE — Stage 2 | 665,2 giây (11 phút 05 giây) | 5 | 6.314 | 4.640 | 9,25 | 663,0 giây |
+
+Thời gian khởi động tới health check: ERNIE build-glossary 14,7 giây, Hy-MT2 58,2 giây, ERNIE Stage 2 25,1 giây. Tổng thời gian CLI cho ba giai đoạn khoảng **18 phút 10 giây**, chưa tính chuyển model.
+
+| Giai đoạn | Working set đỉnh của server | RAM hệ thống trống thấp nhất |
+|---|---:|---:|
+| Hy-MT2 — Stage 1 | 26,89 GiB | 0,02 GiB |
+| ERNIE — Stage 2 | 22,07 GiB | 2,48 GiB |
+
+Working set có tính các trang GGUF memory-mapped. Sau khi dừng server, RAM trống phục hồi khoảng 24,34 GiB. Bộ nhớ riêng của request build-glossary không được lấy mẫu độc lập; số đo ERNIE ở đây là từ lượt Stage 2 cùng model/cấu hình. Đáng lưu ý, Stage 1 gần cạn RAM vật lý; không nên chạy song song model hoặc ứng dụng nặng trên máy 32 GiB.
+
+So với lượt Qwen ở mục 6 trên cùng 140 cue/5 batch (640,3 giây, 8,92 token/giây), lượt ERNIE này mất 665,2 giây (chậm hơn khoảng 3,9%) dù tốc độ sinh token đo được là 9,25 token/giây. Đây không phải A/B hoàn toàn tương đương vì số token sinh và cấu hình server khác nhau; kết quả hiện tại chưa chứng minh ERNIE nhanh hơn Qwen.
+
+### Kết luận
+
+Đã xác nhận end-to-end ERNIE sinh glossary và chạy được Stage 2; 140 cue giữ nguyên cấu trúc/timecode, không fallback, 9/9 target glossary được dùng lại. Tuy nhiên, tốc độ thực tế là khoảng 9–10 token/giây; riêng Stage 2 mất 11 phút cho 140 cue, và glossary tự sinh còn nhiều lỗi tên/thuật ngữ. Kết quả này chưa đủ để đưa glossary vào chạy hàng loạt: cần sửa glossary thủ công sau bước sinh, sau đó chạy lại ít nhất một mẫu để xác nhận tên và xưng hô trước khi mở rộng.
