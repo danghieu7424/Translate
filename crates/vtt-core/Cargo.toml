@@ -5,4 +5,4 @@ edition = "2024"
 license = "MIT"
 
 [dev-dependencies]
-proptest.workspace = true
+proptest = "1"
